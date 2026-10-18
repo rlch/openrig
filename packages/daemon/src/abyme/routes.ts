@@ -111,14 +111,16 @@ export function readFlow(db: Database.Database, rig: RigWithRelations, since: st
   if (sessions.length === 0) return { rig: { id: rig.rig.id, name: rig.rig.name, space }, pods, seats, edges, items: [], transitions: [], watches: [] };
   const marks = sessions.map(() => "?").join(", ");
 
-  const itemRows = db.prepare(`SELECT qitem_id, summary, state, destination_session, ts_updated FROM queue_items
+  const itemRows = db.prepare(`SELECT qitem_id, summary, state, destination_session, ts_updated, handed_off_from FROM queue_items
     WHERE destination_session IN (${marks}) OR source_session IN (${marks}) ORDER BY ts_created`).all(...sessions, ...sessions) as
-    Array<{ qitem_id: string; summary: string | null; state: string; destination_session: string; ts_updated: string }>;
+    Array<{ qitem_id: string; summary: string | null; state: string; destination_session: string; ts_updated: string; handed_off_from: string | null }>;
   const items = itemRows
     .filter((r) => !since || OPEN_STATES.has(r.state) || r.ts_updated >= since)
     .map((r) => ({
       id: r.qitem_id, summary: r.summary, state: r.state, owner: r.destination_session,
       wakeAt: OPEN_STATES.has(r.state) ? readWaitingView(db, r.qitem_id)?.nextBackstop.dueAt ?? null : null,
+      // The item this one continues: a handoff closes an item and opens its successor.
+      from: r.handed_off_from,
     }));
 
   const ids = items.map((i) => i.id);

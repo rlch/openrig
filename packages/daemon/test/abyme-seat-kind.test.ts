@@ -287,7 +287,7 @@ describe("the abyme routes", () => {
     expect(res.status).toBe(200);
     const flow = await res.json() as {
       rig: unknown; pods: unknown[]; seats: unknown[]; edges: unknown[];
-      items: Array<{ id: string; state: string; owner: string; wakeAt: string | null }>;
+      items: Array<{ id: string; state: string; owner: string; wakeAt: string | null; from: string | null }>;
       transitions: Array<{ item: string; state: string; actor: string; note: string | null; wake: unknown }>; watches: unknown[];
     };
     expect(flow.rig).toEqual({ id: rig.id, name: rig.name, space: "group:factory" });
@@ -298,6 +298,7 @@ describe("the abyme routes", () => {
     ]);
     expect(flow.edges).toEqual([{ from: buildNode.id, to: reviewNode.id, kind: "delegates_to" }]);
     expect(flow.items.map((i) => [i.id === item.qitemId, i.state, i.owner])).toEqual([[true, "handed-off", review.sessionName], [false, "pending", build.sessionName]]);
+    expect(flow.items.map((i) => i.from)).toEqual([null, item.qitemId]);
     expect(flow.items[1]!.wakeAt === null || typeof flow.items[1]!.wakeAt === "string").toBe(true);
     expect(flow.transitions.length).toBeGreaterThanOrEqual(3);
     expect(flow.transitions.every((t) => "note" in t && "wake" in t)).toBe(true);
