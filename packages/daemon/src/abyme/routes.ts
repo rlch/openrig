@@ -8,7 +8,7 @@ import type { EventBus } from "../domain/event-bus.js";
 import type { RigRepository } from "../domain/rig-repository.js";
 import type { SessionRegistry } from "../domain/session-registry.js";
 import { deriveCanonicalSessionName, deriveSessionName, validateSessionName } from "../domain/session-name.js";
-import { readWaitingView } from "../domain/queue-waiting.js";
+import { QueueWakeRepository } from "../domain/queue-wake-repository.js";
 import { nextDueAt } from "../domain/watchdog-due.js";
 import { WatchdogJobsRepository } from "../domain/watchdog-jobs-repository.js";
 import { ABYME_KIND, type AbymeSeatKind } from "./seat-kind.js";
@@ -88,6 +88,18 @@ export function abymeRoutes(deps: AbymeRouteDeps): Hono {
   return app;
 }
 
+/** When the wake the holder armed on a parked item is due: a timer or watchdog's next fire, a usage
+ *  blocker's timer expiry. Null when nothing is armed and live, and for a plain blocker, which
+ *  wakes when its blocker closes rather than at a time. Never the queue's generic backstop. */
+function armedWakeAt(wakes: QueueWakeRepository, jobs: WatchdogJobsRepository, qitemId: string): string | null {
+  const wake = wakes.getStatus(qitemId);
+  if (!wake || wake.phase !== "armed" || !wake.live) return null;
+  if (wake.kind === "blocker") return wake.expiresAt ?? null;
+  const job = jobs.getById(wake.ref);
+  const due = job ? nextDueAt(job) : null;
+  return due === null ? wake.expiresAt ?? null : new Date(due).toISOString();
+}
+
 type RigWithRelations = NonNullable<ReturnType<RigRepository["getRig"]>>;
 
 /** One rig as the Flow view reads it. Work is an item owned by or sent from one of the rig's
@@ -114,11 +126,13 @@ export function readFlow(db: Database.Database, rig: RigWithRelations, since: st
   const itemRows = db.prepare(`SELECT qitem_id, summary, state, destination_session, ts_updated, handed_off_from FROM queue_items
     WHERE destination_session IN (${marks}) OR source_session IN (${marks}) ORDER BY ts_created`).all(...sessions, ...sessions) as
     Array<{ qitem_id: string; summary: string | null; state: string; destination_session: string; ts_updated: string; handed_off_from: string | null }>;
+  const wakes = new QueueWakeRepository(db);
+  const jobs = new WatchdogJobsRepository(db);
   const items = itemRows
     .filter((r) => !since || OPEN_STATES.has(r.state) || r.ts_updated >= since)
     .map((r) => ({
       id: r.qitem_id, summary: r.summary, state: r.state, owner: r.destination_session,
-      wakeAt: OPEN_STATES.has(r.state) ? readWaitingView(db, r.qitem_id)?.nextBackstop.dueAt ?? null : null,
+      wakeAt: r.state === "blocked" ? armedWakeAt(wakes, jobs, r.qitem_id) : null,
       // The item this one continues: a handoff closes an item and opens its successor.
       from: r.handed_off_from,
     }));

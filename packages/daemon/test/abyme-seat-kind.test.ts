@@ -299,14 +299,24 @@ describe("the abyme routes", () => {
     expect(flow.edges).toEqual([{ from: buildNode.id, to: reviewNode.id, kind: "delegates_to" }]);
     expect(flow.items.map((i) => [i.id === item.qitemId, i.state, i.owner])).toEqual([[true, "handed-off", review.sessionName], [false, "pending", build.sessionName]]);
     expect(flow.items.map((i) => i.from)).toEqual([null, item.qitemId]);
-    expect(flow.items[1]!.wakeAt === null || typeof flow.items[1]!.wakeAt === "string").toBe(true);
+    // A fresh pending item has no armed wake, whatever the queue's backstop says.
+    expect(flow.items.map((i) => i.wakeAt)).toEqual([null, null]);
     expect(flow.transitions.length).toBeGreaterThanOrEqual(3);
     expect(flow.transitions.every((t) => "note" in t && "wake" in t)).toBe(true);
     expect(flow.transitions.find((t) => t.item === item.qitemId && t.state === "handed-off")?.actor).toBe(review.sessionName);
     expect(flow.watches).toEqual([]);
 
+    // Parked with a timer, its wake is the timer's next fire.
+    const parked = flow.items[1]!.id;
+    await deps.queueRepo!.update({ qitemId: parked, actorSession: build.sessionName, state: "blocked", wakeAfterSeconds: 600 });
+    const armed = await (await app.request(`/api/abyme/flow?rig=${rig.id}`)).json() as typeof flow;
+    const wakeAt = armed.items.find((i) => i.id === parked)!.wakeAt;
+    expect(wakeAt).not.toBeNull();
+    expect(Date.parse(wakeAt!) - Date.now()).toBeGreaterThan(590_000);
+    expect(Date.parse(wakeAt!) - Date.now()).toBeLessThanOrEqual(600_000);
+
     const later = await (await app.request(`/api/abyme/flow?rig=${rig.id}&since=2999-01-01T00:00:00.000Z`)).json() as typeof flow;
-    expect(later.items.map((i) => i.state)).toEqual(["pending"]);
+    expect(later.items.map((i) => i.state)).toEqual(["blocked"]);
     expect(later.transitions).toEqual([]);
     expect((await app.request("/api/abyme/flow")).status).toBe(400);
     expect((await app.request("/api/abyme/flow?rig=nope")).status).toBe(404);
