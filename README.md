@@ -1,3 +1,8 @@
+> **Fork branch `abyme`: never offered upstream.** This branch runs OpenRig inside abyme: an
+> `abyme` seat kind whose seats are abyme agents (`packages/daemon/src/abyme/`), a daemon entry that
+> needs no tmux and writes only under `OPENRIG_HOME` (`packages/daemon/src/abyme.ts`), and the
+> `openrig` process abyme places (`.abyme/processes.ts`). It sits on `seat-seams` and is rebased onto it.
+
 # OpenRig
 
 [![npm version](https://img.shields.io/npm/v/@openrig/cli)](https://www.npmjs.com/package/@openrig/cli) [![npm downloads](https://img.shields.io/npm/dw/@openrig/cli)](https://www.npmjs.com/package/@openrig/cli) [![License: Apache 2.0](https://img.shields.io/github/license/mvschwarz/openrig)](LICENSE) [![GitHub stars](https://img.shields.io/github/stars/mvschwarz/openrig?style=social)](https://github.com/mvschwarz/openrig/stargazers)

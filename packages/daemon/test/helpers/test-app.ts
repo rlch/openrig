@@ -148,6 +148,7 @@ export const migrationsForFullTestDb = [coreSchema, bindingsSessionsSchema, even
  * its exclusion); the guard's redundant-exclusion check then keeps the two in sync.
  */
 export const migrationsForFullTestDbExclusions: Record<string, string> = {
+  "abyme_001_seats.sql": "fork branch abyme: the abyme seat kind's own tables; its suites migrate ALL_MIGRATIONS.",
   "082_archive_identity_provenance.sql": "archive extension; 054 is excluded from this core fixture. Archive identity regressions use ALL_MIGRATIONS.",
   "026_inbox_entries.sql": "inbox subsystem table — not on the shared core edge (inbox suites migrate it inline).",
   "027_outbox_entries.sql": "outbox subsystem table — not on the shared core edge (outbox suites migrate it inline).",
