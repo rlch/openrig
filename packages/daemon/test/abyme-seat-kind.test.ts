@@ -170,6 +170,21 @@ describe("the abyme seat kind", () => {
     expect(tmuxCommands).toEqual([]);
   });
 
+  it("passes an abyme agent that holds no seat as the sender, and the operator as none", async () => {
+    const { rig } = makeRig();
+    const build = await launch(rig.id, "dev.build", rig.name);
+    plugin.calls.length = 0;
+
+    await deps.queueRepo!.create({ sourceSession: "agent:acp:k3", destinationSession: build.sessionName, body: "write the README" });
+    await expect.poll(() => plugin.calls.filter((c) => c.verb === "deliver").length).toBe(1);
+    expect(plugin.calls[0]!.body).toMatchObject({ agent: agentOf(build.sessionName), kind: "message", from: "acp:k3" });
+
+    plugin.calls.length = 0;
+    await deps.queueRepo!.create({ sourceSession: "operator", destinationSession: build.sessionName, body: "and the docs" });
+    await expect.poll(() => plugin.calls.filter((c) => c.verb === "deliver").length).toBe(1);
+    expect(plugin.calls[0]!.body.from).toBeUndefined();
+  });
+
   it("delivers a watchdog's fire as a watch, and a parked item's timer as a wake", async () => {
     const { rig } = makeRig();
     const build = await launch(rig.id, "dev.build", rig.name);

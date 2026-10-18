@@ -13,6 +13,8 @@ import type { AgentActivity } from "../domain/types.js";
 
 export const ABYME_KIND = "abyme";
 export const ABYME_ENDPOINT_FILE = "abyme.json";
+/** The sender OpenRig records for an abyme agent that holds no seat: `agent:<id>`. */
+export const AGENT_SENDER = "agent:";
 
 export interface AbymeEndpoint { url: string; token: string }
 
@@ -168,9 +170,11 @@ export class AbymeSeatKind implements SeatKind {
     deliver: async (ref: SeatRef, text: string, opts: SendOpts): Promise<SendResult> => {
       const seat = this.seatForSession(ref.sessionName);
       if (!seat) return { ok: false, sessionName: ref.sessionName, reason: "session_missing", error: `No abyme agent holds ${ref.sessionName}` };
-      // A plain send names its sender only as the actor; a seat's actor is the seat.
+      // A plain send names its sender only as the actor; a seat's actor is the seat, and an abyme
+      // agent that holds no seat is `agent:<id>`.
       const fromSession = opts.origin ? opts.origin.fromSession : opts.actorSession ?? undefined;
-      const from = fromSession ? this.seatForSession(fromSession)?.agent : undefined;
+      const from = fromSession?.startsWith(AGENT_SENDER) ? fromSession.slice(AGENT_SENDER.length) || undefined
+        : fromSession ? this.seatForSession(fromSession)?.agent : undefined;
       try {
         await this.call("deliver", { agent: seat.agent, text, kind: opts.origin?.kind ?? "message", ...(from ? { from } : {}) });
         return { ok: true, sessionName: ref.sessionName, verified: true, outcome: "delivered" };
