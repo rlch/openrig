@@ -2,6 +2,7 @@
 //   POST /api/abyme/bind  { rigId, member, agent } -> { nodeId, session }
 //   GET  /api/abyme/seats                          -> [{ session, nodeId, rigId, agent }]
 //   GET  /api/abyme/flow?rig=<id>&since=<iso>      -> one rig's seats, edges, work and its history
+import nodePath from "node:path";
 import { Hono } from "hono";
 import type Database from "better-sqlite3";
 import type { EventBus } from "../domain/event-bus.js";
@@ -111,16 +112,26 @@ export function readFlow(db: Database.Database, rig: RigWithRelations, since: st
   const agentOf = db.prepare("SELECT agent_id FROM abyme_seats WHERE session_name = ?");
   const latestSession = db.prepare("SELECT session_name FROM sessions WHERE node_id = ? ORDER BY id DESC LIMIT 1");
 
-  const seats = rig.nodes.map((node) => {
+  const seats: Array<{ nodeId: string; member: string; session: string | null; pod: string | null; agent: string | null; removed?: true }> = rig.nodes.map((node) => {
     const session = node.binding?.externalSessionName ?? node.binding?.tmuxSession
       ?? (latestSession.get(node.id) as { session_name: string } | undefined)?.session_name ?? null;
     const agent = session ? (agentOf.get(session) as { agent_id: string } | undefined)?.agent_id ?? null : null;
     return { nodeId: node.id, member: node.logicalId, session, pod: node.podId ?? null, agent };
   });
+  // The folder of the spec the rig came up from, which a member's `local:` agent ref is under.
+  const source = (db.prepare("SELECT source_ref FROM bootstrap_runs WHERE rig_id = ? AND source_kind = 'rig_spec' ORDER BY created_at DESC, rowid DESC LIMIT 1")
+    .get(rig.rig.id) as { source_ref: string } | undefined)?.source_ref;
+  const root = source ? nodePath.dirname(source) : null;
   const edges = rig.edges.map((e) => ({ from: e.sourceId, to: e.targetId, kind: e.kind }));
+  // Seats an abyme agent held whose node is gone (a change seat after its branch landed): a lane
+  // while work in the window names them.
+  const standing = new Set(rig.nodes.map((n) => n.id));
+  const removed = (db.prepare("SELECT session_name, node_id, member, pod_id FROM abyme_seat_log WHERE rig_id = ?").all(rig.rig.id) as
+    Array<{ session_name: string; node_id: string; member: string; pod_id: string | null }>)
+    .filter((r) => !standing.has(r.node_id) && !seats.some((s) => s.session === r.session_name));
 
-  const sessions = seats.flatMap((s) => (s.session ? [s.session] : []));
-  if (sessions.length === 0) return { rig: { id: rig.rig.id, name: rig.rig.name, space }, pods, seats, edges, items: [], transitions: [], watches: [] };
+  const sessions = [...seats.flatMap((s) => (s.session ? [s.session] : [])), ...removed.map((r) => r.session_name)];
+  if (sessions.length === 0) return { rig: { id: rig.rig.id, name: rig.rig.name, space, root }, pods, seats, edges, items: [], transitions: [], watches: [] };
   const marks = sessions.map(() => "?").join(", ");
 
   const itemRows = db.prepare(`SELECT qitem_id, summary, state, destination_session, ts_updated, handed_off_from FROM queue_items
@@ -159,6 +170,10 @@ export function readFlow(db: Database.Database, rig: RigWithRelations, since: st
   }
   transitions.sort((a, b) => a.id - b.id);
 
+  const named = new Set([...items.map((i) => i.owner), ...transitions.flatMap((t) => [t.actor, t.target])]);
+  for (const r of removed) {
+    if (named.has(r.session_name)) seats.push({ nodeId: r.node_id, member: r.member, session: r.session_name, pod: r.pod_id, agent: null, removed: true as const });
+  }
   const inRig = new Set(sessions);
   const watches = new WatchdogJobsRepository(db).listActive()
     .filter((job) => inRig.has(job.targetSession))
@@ -167,5 +182,5 @@ export function readFlow(db: Database.Database, rig: RigWithRelations, since: st
       return { id: job.jobId, policy: job.policy, target: job.targetSession, nextAt: due === null ? null : new Date(due).toISOString() };
     });
 
-  return { rig: { id: rig.rig.id, name: rig.rig.name, space }, pods, seats, edges, items, transitions, watches };
+  return { rig: { id: rig.rig.id, name: rig.rig.name, space, root }, pods, seats, edges, items, transitions, watches };
 }

@@ -170,6 +170,24 @@ describe("the abyme seat kind", () => {
     expect(tmuxCommands).toEqual([]);
   });
 
+  it("starts a change's seat on its branch, off its base", async () => {
+    const { rig } = makeRig();
+    const launched = await deps.nodeLauncher.launchNode(rig.id, "dev.build", { sessionName: `dev-build@${rig.name}`, env: { ABYME_BRANCH: "openrig-give-work" } });
+    if (!launched.ok) throw new Error(launched.message);
+    expect(plugin.calls.find((c) => c.verb === "start")!.body).toMatchObject({ member: "build", branch: "openrig-give-work", base: "main" });
+    plugin.calls.length = 0;
+    const review = await deps.nodeLauncher.launchNode(rig.id, "dev.review", { sessionName: `dev-review@${rig.name}`, env: { ABYME_BRANCH: "x", ABYME_BASE: "release" } });
+    if (!review.ok) throw new Error(review.message);
+    expect(plugin.calls.find((c) => c.verb === "start")!.body).toMatchObject({ branch: "x", base: "release" });
+
+    // A member added for a change names its branch in its own env.
+    plugin.calls.length = 0;
+    const pod = new PodRepository(db).getPodByNamespace(rig.id, "dev")!;
+    deps.rigRepo.addNode(rig.id, "dev.openrig-seats", { role: "worker", runtime: "claude-code", podId: pod.id, env: { ABYME_BRANCH: "openrig-seats" } });
+    await launch(rig.id, "dev.openrig-seats", rig.name);
+    expect(plugin.calls.find((c) => c.verb === "start")!.body).toMatchObject({ member: "openrig-seats", branch: "openrig-seats", base: "main" });
+  });
+
   it("passes an abyme agent that holds no seat as the sender, and the operator as none", async () => {
     const { rig } = makeRig();
     const build = await launch(rig.id, "dev.build", rig.name);
@@ -291,6 +309,25 @@ describe("the abyme routes", () => {
     expect(tmuxCommands).toEqual([]);
   });
 
+  it("keeps a removed seat in a rig's flow while work in its window names it", async () => {
+    const { rig, pod, review: reviewNode } = makeRig();
+    const build = await launch(rig.id, "dev.build", rig.name);
+    const review = await launch(rig.id, "dev.review", rig.name);
+    const item = await deps.queueRepo!.create({ sourceSession: build.sessionName, destinationSession: review.sessionName, body: "review it", summary: "review" });
+    await deps.queueRepo!.handoff({ qitemId: item.qitemId, fromSession: review.sessionName, toSession: build.sessionName, body: "fix it" });
+
+    const removed = await app.request(`/api/rigs/${rig.id}/nodes/dev.review`, { method: "DELETE" });
+    expect(removed.status).toBe(200);
+    type Seats = { seats: Array<{ session: string; agent: string | null; removed?: boolean }>; items: Array<{ owner: string }> };
+    const flow = await (await app.request(`/api/abyme/flow?rig=${rig.id}`)).json() as Seats;
+    expect(flow.seats.find((s) => s.session === review.sessionName)).toEqual({ nodeId: reviewNode.id, member: "dev.review", session: review.sessionName, pod: pod.id, agent: null, removed: true });
+    expect(flow.items.map((i) => i.owner)).toEqual([review.sessionName, build.sessionName]);
+
+    // Past its window, nothing names it: it is gone.
+    const later = await (await app.request(`/api/abyme/flow?rig=${rig.id}&since=${new Date(Date.now() + 60_000).toISOString()}`)).json() as Seats;
+    expect(later.seats.map((s) => s.session)).toEqual([build.sessionName]);
+  });
+
   it("reads a rig's flow: pods, seats, edges, work, transitions and watches", async () => {
     const { rig, pod, build: buildNode, review: reviewNode } = makeRig();
     const build = await launch(rig.id, "dev.build", rig.name);
@@ -305,7 +342,7 @@ describe("the abyme routes", () => {
       items: Array<{ id: string; state: string; owner: string; wakeAt: string | null; from: string | null }>;
       transitions: Array<{ item: string; state: string; actor: string; note: string | null; wake: unknown }>; watches: unknown[];
     };
-    expect(flow.rig).toEqual({ id: rig.id, name: rig.name, space: "group:factory" });
+    expect(flow.rig).toEqual({ id: rig.id, name: rig.name, space: "group:factory", root: null });
     expect(flow.pods).toEqual([{ id: pod.id, namespace: "dev", label: "Dev" }]);
     expect(flow.seats).toEqual([
       { nodeId: buildNode.id, member: "dev.build", session: build.sessionName, pod: pod.id, agent: agentOf(build.sessionName) },

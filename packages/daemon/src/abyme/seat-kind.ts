@@ -2,7 +2,8 @@
 // abyme seat is one HTTP call to the openrig plugin on abymed, which turns it into one call on
 // abyme's agents API. The plugin's url and token are in `$OPENRIG_HOME/abyme.json`, read per call
 // so a plugin restart that rewrites it needs no daemon restart. Which agent holds each seat is
-// kept here, in `abyme_seats`; which space each rig is, in `abyme_rigs`.
+// kept here, in `abyme_seats` (and every seat ever held, in `abyme_seat_log`); which space each rig
+// is, in `abyme_rigs`.
 import fs from "node:fs";
 import nodePath from "node:path";
 import type Database from "better-sqlite3";
@@ -100,6 +101,8 @@ export class AbymeSeatKind implements SeatKind {
     const db = this.database;
     db.transaction(() => {
       db.prepare("INSERT OR REPLACE INTO abyme_seats (session_name, node_id, agent_id) VALUES (?, ?, ?)").run(seat.session, seat.nodeId, seat.agent);
+      db.prepare(`INSERT OR REPLACE INTO abyme_seat_log (session_name, rig_id, node_id, member, pod_id)
+        SELECT ?, rig_id, id, logical_id, pod_id FROM nodes WHERE id = ?`).run(seat.session, seat.nodeId);
       if (rig?.space) db.prepare("INSERT OR REPLACE INTO abyme_rigs (rig_id, space_id) VALUES (?, ?)").run(rig.rigId, rig.space);
     })();
   }
@@ -121,6 +124,8 @@ export class AbymeSeatKind implements SeatKind {
           rig: node.rig_id, rigName: req.rigName, pod, member, session: req.sessionName,
           ...(req.cwd ? { cwd: req.cwd } : {}),
           ...(req.env.ABYME_PRESET ? { preset: req.env.ABYME_PRESET } : {}),
+          // A change's seat starts on the change's branch, off its base (main unless named).
+          ...(req.env.ABYME_BRANCH ? { branch: req.env.ABYME_BRANCH, base: req.env.ABYME_BASE || "main" } : {}),
         });
         if (typeof started?.agent !== "string" || !started.agent) {
           return { ok: false, code: "abyme_start_failed", message: "abyme seat start: the plugin answered no agent" };

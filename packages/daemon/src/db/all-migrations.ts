@@ -116,6 +116,7 @@ import { queueTransitionsTsQitemSchema } from "./migrations/112_queue_transition
 import { appliedLaunchDaemonOptOutSchema } from "./migrations/113_applied_launch_daemon_opt_out.js";
 import { sessionAgentAppSchema } from "./migrations/114_session_agent_app.js";
 import { abymeSeatsSchema } from "./migrations/abyme_001_seats.js";
+import { abymeSeatLogSchema } from "./migrations/abyme_002_seat_log.js";
 
 /** Ordered migrations; numbers may be reserved by independent changes. */
 
@@ -231,4 +232,5 @@ export const ALL_MIGRATIONS: Migration[] = [
   appliedLaunchDaemonOptOutSchema,
   sessionAgentAppSchema,
   abymeSeatsSchema,
+  abymeSeatLogSchema,
 ];
