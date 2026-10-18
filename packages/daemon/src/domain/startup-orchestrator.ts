@@ -183,6 +183,9 @@ type StartupDeliveryInput = StartupInput & {
   startupAttemptId: string; sendOrder: number; submissionDiagnostics: StartupSubmissionDiagnostic[];
   /** Claude only: whether the latest interactive send was observed submitted (a clear composer). */
   lastSubmissionConfirmed?: boolean;
+  /** A registered kind's seat: the guidance files (the culture) a tmux seat gets merged into its
+   *  cwd, as text for the seat's first message. Cleared once sent. */
+  seatGuidance?: string;
 };
 
 export type StartupResult = { warnings?: string[] } & (
@@ -389,6 +392,16 @@ export class StartupOrchestrator {
       }
     }
 
+    // A registered kind's seat gets nothing in its cwd: its guidance (the default culture and the
+    // rig's culture_file) goes in its first message instead, and skill installs are not made.
+    if (customKind) {
+      deliveryInput.seatGuidance = preLaunchFiles
+        .filter((f) => (f.deliveryHint === "auto" ? resolveConcreteHint(f.path, this.safeReadFile(f.absolutePath)) : f.deliveryHint) === "guidance_merge")
+        .map((f) => this.safeReadFile(f.absolutePath).trim())
+        .filter(Boolean)
+        .join("\n\n") || undefined;
+    }
+
     // 4. Deliver pre-launch files (filesystem: guidance_merge, skill_install)
     // Always call even with empty list so adapters can provision runtime-specific config (e.g. context collectors)
     if (!customKind) try {
@@ -591,6 +604,15 @@ export class StartupOrchestrator {
       if (challenge) await this.sendProofInstruction(deliveryInput);
     } else if (challenge) {
       challengeOnlyPrompt = challenge.promptBlock;
+    }
+    // No identity prompt carried the guidance (a restore, or a spec without one): it goes first, alone.
+    if (deliveryInput.seatGuidance) {
+      const failure = await this.sendInteractiveText(deliveryInput, deliveryInput.seatGuidance, "post_launch_file");
+      if (failure) {
+        errors.push(`Seat guidance delivery failed: ${failure.error}`);
+        return this.fail(deliveryInput, "failed", errors, undefined, false, undefined, false, "post_launch_files", true);
+      }
+      deliveryInput.seatGuidance = undefined;
     }
 
     // OPR.0.4.7.17 restore-order-correction (qitem-e99624f7). On a resumed
@@ -876,7 +898,7 @@ export class StartupOrchestrator {
     }
 
     const firstSendTextIndex = postLaunchFiles.findIndex((file) => file.deliveryHint === "send_text");
-    let prompt = identityAction.value;
+    let prompt = input.seatGuidance ? `${identityAction.value}\n\n${input.seatGuidance}` : identityAction.value;
     let remainingFiles = postLaunchFiles;
 
     if (firstSendTextIndex !== -1) {
@@ -905,6 +927,7 @@ export class StartupOrchestrator {
     if (sendError) {
       return { ok: false, error: `Initial session identity prompt failed: ${sendError.error}` };
     }
+    input.seatGuidance = undefined;
 
     return { ok: true, remainingFiles };
   }

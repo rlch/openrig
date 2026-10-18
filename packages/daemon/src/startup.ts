@@ -704,7 +704,7 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
   const restoreOrchestrator = new RestoreOrchestrator({
     db, rigRepo, sessionRegistry, eventBus, snapshotRepo, snapshotCapture,
     checkpointStore, nodeLauncher, tmuxAdapter, claudeResume, codexResume, piResume, ompResume,
-    transcriptStore, serviceOrchestrator,
+    transcriptStore, serviceOrchestrator, seatKinds,
   });
 
   // Connect to cmux at startup — degrades gracefully if absent

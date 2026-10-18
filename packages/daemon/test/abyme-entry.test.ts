@@ -164,4 +164,73 @@ describe("the abyme daemon entry", () => {
     // Everything else it wrote is in OPENRIG_HOME: the scratch folder holds nothing new beside these.
     expect(fs.readdirSync(scratch).sort()).toEqual(["openrig-home", "operator-home", "spec"]);
   }, 180_000);
+
+  it("leaves a claude-code seat's cwd byte for byte as it was, through rig up, add-member and a restore", async () => {
+    const dir = path.join(scratch, "cwd-rig");
+    const cwd = path.join(dir, "checkout");
+    fs.mkdirSync(path.join(cwd, ".claude"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, "CLAUDE.md"), "# the operator's own\n");
+    fs.writeFileSync(path.join(cwd, "AGENTS.md"), "# theirs too\n");
+    fs.writeFileSync(path.join(cwd, ".claude", "settings.json"), "{}\n");
+    fs.mkdirSync(path.join(dir, "agents", "worker"), { recursive: true });
+    fs.copyFileSync(path.join(specDir, "agents", "worker", "agent.yaml"), path.join(dir, "agents", "worker", "agent.yaml"));
+    fs.writeFileSync(path.join(dir, "culture.md"), "CULTURE-MARKER: work in small steps.\n");
+    fs.writeFileSync(path.join(dir, "rig.yaml"), [
+      'version: "0.2"', "name: cwdrig", "culture_file: culture.md", "pods:", "  - id: dev", "    label: Dev", "    members:",
+      "      - id: build", '        agent_ref: "local:agents/worker"', "        profile: default", "        runtime: claude-code", `        cwd: ${cwd}`,
+      "    edges: []", "",
+    ].join("\n"));
+    const before = tree(cwd);
+
+    const port = await freePort();
+    child = run({ PATH: bareEnvPath, HOME: fakeHome, OPENRIG_HOME: openrigHome, OPENRIG_PORT: String(port) });
+    await until(() => /listening on http:\/\/127\.0\.0\.1:/.test(log), 90_000, "the daemon to listen");
+    const base = `http://127.0.0.1:${port}`;
+    pluginCalls.length = 0;
+
+    const up = await fetch(`${base}/api/up`, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sourceRef: path.join(dir, "rig.yaml"), autoApprove: true }) });
+    const upBody = await up.json() as { rigId?: string };
+    expect(up.status, JSON.stringify(upBody)).toBeLessThan(300);
+    expect(tree(cwd)).toEqual(before);
+    const culture = (calls: typeof pluginCalls) => calls.some((c) => c.verb === "deliver" && String(c.body.text).includes("CULTURE-MARKER"));
+    expect(culture(pluginCalls), JSON.stringify(pluginCalls)).toBe(true);
+    // Both cultures ride in the seat's first message.
+    const first = pluginCalls.find((c) => c.verb === "deliver")!;
+    expect(String(first.body.text)).toContain("# OpenRig default culture");
+    expect(String(first.body.text)).toContain("CULTURE-MARKER");
+
+    pluginCalls.length = 0;
+    const rigs = await (await fetch(`${base}/api/rigs`)).json() as Array<{ id: string; name: string }>;
+    const rigId = upBody.rigId ?? rigs.find((r) => r.name === "cwdrig")!.id;
+    const added = await fetch(`${base}/api/rigs/${rigId}/pods/dev/members`, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rigRoot: dir, member: { id: "review", agent_ref: "local:agents/worker", profile: "default", runtime: "claude-code", cwd } }) });
+    expect(added.status, await added.clone().text()).toBeLessThan(300);
+    expect(pluginCalls.some((c) => c.verb === "start" && c.body.member === "review")).toBe(true);
+    // add-member's spec has no rig culture_file (OpenRig keeps none per rig): the default culture only.
+    expect(pluginCalls.some((c) => c.verb === "deliver" && String(c.body.text).includes("# OpenRig default culture"))).toBe(true);
+    // The context monitor and every later poll: still nothing in the cwd.
+    await new Promise((r) => setTimeout(r, 3000));
+    expect(tree(cwd)).toEqual(before);
+
+    // Down, then up by name: a restore, as on the live rig. It starts through the plugin too.
+    const down = await fetch(`${base}/api/down`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ rigId }) });
+    expect(down.status, await down.clone().text()).toBeLessThan(300);
+    pluginCalls.length = 0;
+    const again = await fetch(`${base}/api/up`, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sourceRef: "cwdrig", autoApprove: true, freshLogicalIds: ["dev.build", "dev.review"] }) });
+    const againBody = await again.text();
+    expect(again.status, againBody).toBeLessThan(300);
+    expect(againBody).not.toContain("No tmux session bound");
+    expect(againBody).not.toContain("guidanceGaps");
+    expect(pluginCalls.filter((c) => c.verb === "start").length, againBody).toBe(2);
+    await new Promise((r) => setTimeout(r, 2000));
+    expect(tree(cwd)).toEqual(before);
+    expect(pluginCalls.some((c) => c.verb === "deliver" && String(c.body.text).includes("# OpenRig default culture")), againBody).toBe(true);
+    expect(tree(cwd)).toEqual(before);
+
+    child.kill("SIGTERM");
+    await new Promise((r) => child!.once("exit", r));
+    expect(tree(fakeHome)).toEqual(homeBefore);
+  }, 180_000);
 });

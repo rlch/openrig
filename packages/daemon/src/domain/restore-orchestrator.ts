@@ -13,6 +13,7 @@ import type { SnapshotRepository } from "./snapshot-repository.js";
 import type { SnapshotCapture } from "./snapshot-capture.js";
 import type { CheckpointStore } from "./checkpoint-store.js";
 import type { NodeLauncher } from "./node-launcher.js";
+import type { SeatKindRegistry } from "./seat-kinds.js";
 import type { TmuxAdapter } from "../adapters/tmux.js";
 import type { ClaudeResumeAdapter } from "../adapters/claude-resume.js";
 import type { CodexResumeAdapter } from "../adapters/codex-resume.js";
@@ -186,6 +187,9 @@ interface RestoreOrchestratorDeps {
   transcriptStore?: TranscriptStore;
   serviceOrchestrator?: import("./service-orchestrator.js").ServiceOrchestrator;
   listProcesses?: () => Promise<Array<{ pid: number; ppid: number; command: string }>>;
+  /** Seat kinds registered beyond tmux; a restored seat of one starts through its host and gets
+   *  nothing written into its cwd. Absent = none. */
+  seatKinds?: SeatKindRegistry;
 }
 
 export class RestoreOrchestrator {
@@ -197,6 +201,7 @@ export class RestoreOrchestrator {
   private snapshotRepo: SnapshotRepository;
   private snapshotCapture: SnapshotCapture;
   private nodeLauncher: NodeLauncher;
+  private seatKinds: SeatKindRegistry | null;
   private tmuxAdapter: TmuxAdapter;
   private claudeResume: ClaudeResumeAdapter;
   private codexResume: CodexResumeAdapter;
@@ -237,6 +242,7 @@ export class RestoreOrchestrator {
     this.snapshotRepo = deps.snapshotRepo;
     this.snapshotCapture = deps.snapshotCapture;
     this.nodeLauncher = deps.nodeLauncher;
+    this.seatKinds = deps.seatKinds ?? null;
     this.tmuxAdapter = deps.tmuxAdapter;
     this.claudeResume = deps.claudeResume;
     this.codexResume = deps.codexResume;
@@ -1061,6 +1067,9 @@ export class RestoreOrchestrator {
     data: SnapshotData,
     warnings?: string[],
   ): RestoreNodeResult {
+    // A registered kind's seat gets its guidance as a message, never as blocks in its cwd.
+    const binding = this.sessionRegistry.getBindingForNode(node.id);
+    if (this.seatKinds?.custom(binding?.attachmentType)) return result;
     // Every status with a live session; attention_required keeps its status and gains the disclosure.
     if (!["resumed", "fresh-primed", "fresh", "rebuilt", "attention_required"].includes(result.status)) return result;
     let guidance: ReturnType<typeof seatGuidance>;
@@ -1176,7 +1185,9 @@ export class RestoreOrchestrator {
     // the adapter uses its current relay/manifest, not the old install's path.
     // No current profile resolution, guidance, skills or startup replay belongs here.
     const activityAdapter = opts?.adapters?.["claude-code"];
-    if (resumeRequested && resumeToken && launchResult && startupCtx?.runtime === "claude-code" && activityAdapter) {
+    // A registered kind's seat has no harness OpenRig set up: nothing is written into its cwd.
+    const customSeat = !!launchResult && !!this.seatKinds?.custom(launchResult.binding.attachmentType);
+    if (!customSeat && resumeRequested && resumeToken && launchResult && startupCtx?.runtime === "claude-code" && activityAdapter) {
       const entries = startupCtx.projectionEntries.filter(e =>
         e.category === "runtime_resource" && e.resourceType === "claude_activity_hooks");
       if (entries.length > 0) try {
@@ -1200,7 +1211,7 @@ export class RestoreOrchestrator {
     // startup selection. Ordinary `rig down` strips them; without this the resumed
     // seat came back with no role, culture or SOP. Existing blocks are never refreshed; nothing
     // reaches the conversation; no action, skill or plugin runs. Never blocks the resume.
-    if (resumeRequested && resumeToken && launchResult) {
+    if (!customSeat && resumeRequested && resumeToken && launchResult) {
       let guidance: ReturnType<typeof seatGuidance> = null;
       try {
         guidance = seatGuidance(startupCtx, node.cwd, this.rigRepo.getRigClaudeManagedBlockFile(rigId), existsSync, (path) => readFileSync(path, "utf-8"));
@@ -1423,6 +1434,8 @@ export class RestoreOrchestrator {
           try {
             const { StartupOrchestrator } = await import("./startup-orchestrator.js");
             const startupOrch = new StartupOrchestrator({ db: this.db, sessionRegistry: this.sessionRegistry, eventBus: this.eventBus, tmuxAdapter: this.tmuxAdapter,
+              // A registered kind's seat gets its guidance as text, so this one reads the files.
+              ...(this.seatKinds ? { seatKinds: this.seatKinds, readFile: (path: string) => readFileSync(path, "utf-8") } : {}),
               ...(this.listProcesses ? { listProcesses: this.listProcesses } : {}) });
             const replayAsRestore = baseStatus !== "fresh-primed";
             const shouldLaunchHarness = isPodAware;
