@@ -207,8 +207,10 @@ describe("the abyme daemon entry", () => {
       body: JSON.stringify({ rigRoot: dir, member: { id: "review", agent_ref: "local:agents/worker", profile: "default", runtime: "claude-code", cwd } }) });
     expect(added.status, await added.clone().text()).toBeLessThan(300);
     expect(pluginCalls.some((c) => c.verb === "start" && c.body.member === "review")).toBe(true);
-    // add-member's spec has no rig culture_file (OpenRig keeps none per rig): the default culture only.
-    expect(pluginCalls.some((c) => c.verb === "deliver" && String(c.body.text).includes("# OpenRig default culture"))).toBe(true);
+    // The seat added later gets the rig's culture_file, as rig up recorded it, and the default culture.
+    const addedFirst = pluginCalls.find((c) => c.verb === "deliver")!;
+    expect(String(addedFirst.body.text)).toContain("# OpenRig default culture");
+    expect(String(addedFirst.body.text)).toContain("CULTURE-MARKER");
     // The context monitor and every later poll: still nothing in the cwd.
     await new Promise((r) => setTimeout(r, 3000));
     expect(tree(cwd)).toEqual(before);

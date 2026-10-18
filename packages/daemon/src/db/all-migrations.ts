@@ -117,6 +117,7 @@ import { appliedLaunchDaemonOptOutSchema } from "./migrations/113_applied_launch
 import { sessionAgentAppSchema } from "./migrations/114_session_agent_app.js";
 import { abymeSeatsSchema } from "./migrations/abyme_001_seats.js";
 import { abymeSeatLogSchema } from "./migrations/abyme_002_seat_log.js";
+import { rigCultureFilesSchema } from "./migrations/abyme_003_rig_culture_files.js";
 
 /** Ordered migrations; numbers may be reserved by independent changes. */
 
@@ -233,4 +234,5 @@ export const ALL_MIGRATIONS: Migration[] = [
   sessionAgentAppSchema,
   abymeSeatsSchema,
   abymeSeatLogSchema,
+  rigCultureFilesSchema,
 ];

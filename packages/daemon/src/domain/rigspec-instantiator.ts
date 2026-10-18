@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import nodePath from "node:path";
 import { effortPrecedence, readSeatEffort } from "./seat-effort.js";
 import type Database from "better-sqlite3";
@@ -997,6 +998,8 @@ export class PodRigInstantiator {
     // does — without a whole-rig spec or a YAML round-trip. The member fragment
     // is embedded raw (spec snake_case shape, as expand's structured path emits);
     // validate/normalize is the type gate.
+    // The rig's own culture, as rig up recorded it, so the new seat gets what its peers got.
+    const culture = this.rigCultureFile(rigId);
     const rawSpec: Record<string, unknown> = {
       version: "0.2",
       name: rig.rig.name,
@@ -1013,6 +1016,8 @@ export class PodRigInstantiator {
       return { ok: false, code: "validation_failed", errors: validation.errors };
     }
     const rigSpec = PodRigSpecSchema.normalize(rawSpec);
+    // Set after validation: the recorded path is absolute, which a spec's own culture_file may not be.
+    if (culture) rigSpec.cultureFile = culture;
     const member = rigSpec.pods[0]!.members[0]!;
     const qualifiedId = `${podNamespace}.${member.id}`;
 
@@ -2137,6 +2142,7 @@ export class PodRigInstantiator {
       );
     }
 
+    this.recordRigCulture(input.rigId, input.rigSpec, input.rigRoot);
     const resolvedFiles = this.buildResolvedStartupFiles(
       resolveResult.resolved.spec,
       resolveResult.resolved.sourcePath,
@@ -2407,6 +2413,7 @@ export class PodRigInstantiator {
       memberStartup: input.member.startup,
       operatorStartup: undefined,
     });
+    this.recordRigCulture(input.rigId, input.rigSpec, input.rigRoot);
     const resolvedFiles = this.buildTerminalResolvedStartupFiles(input.rigSpec, input.rigRoot, input.pod, input.member);
     const binding: NodeBinding = {
       id: launchResult.binding.id,
@@ -2502,6 +2509,23 @@ export class PodRigInstantiator {
     } catch {
       /* best-effort */
     }
+  }
+
+  /** Keep the culture_file a rig came up with (absolute), for seats added to it later. */
+  private recordRigCulture(rigId: string, rigSpec: PodRigSpec, rigRoot: string): void {
+    if (!rigSpec.cultureFile) return;
+    try {
+      this.deps.rigRepo.db.prepare("INSERT OR REPLACE INTO rig_culture_files (rig_id, path) VALUES (?, ?)")
+        .run(rigId, nodePath.resolve(rigRoot, rigSpec.cultureFile));
+    } catch { /* a schema without the table (bootstrap fixtures): later seats get the default culture only */ }
+  }
+
+  /** The culture_file rig up recorded for this rig, while it still exists. */
+  private rigCultureFile(rigId: string): string | null {
+    try {
+      const row = this.deps.rigRepo.db.prepare("SELECT path FROM rig_culture_files WHERE rig_id = ?").get(rigId) as { path: string } | undefined;
+      return row && existsSync(row.path) ? row.path : null;
+    } catch { return null; }
   }
 
   private buildTerminalResolvedStartupFiles(
