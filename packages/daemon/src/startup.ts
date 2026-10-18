@@ -2080,8 +2080,10 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
           const deliveryId = `guard-watchdog-${source.occurrenceId ?? source.jobId}`;
           const previous = outboxHandlerInstance.getById(deliveryId);
           const payload = previous?.guardBinding ? previous.body : formatWatchdogDeliveryMessage(source, message);
+          // A job armed as a parked item's timer is a wake; any other job is a watch.
+          const timer = db.prepare("SELECT 1 FROM queue_transition_wakes WHERE wake_ref = ? AND wake_kind = 'timer' LIMIT 1").get(source.jobId);
           const result = await sessionTransport.send(targetSession, payload,
-            { deliveryId, actorSession: "watchdog@system", auditPointer: source.jobId });
+            { deliveryId, actorSession: "watchdog@system", auditPointer: source.jobId, origin: { kind: timer ? "wake" : "watch" } });
           if (result.outcome === "retained") return { status: "retained", outboxIds: result.outboxIds, continuityActionCompleted };
           return result.ok
             ? { status: "ok", continuityActionCompleted }

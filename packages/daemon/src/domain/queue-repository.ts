@@ -7,6 +7,7 @@ import { resolveExternal } from "./gateway/external-admission.js";
 import type { PersistedEvent } from "./types.js";
 import { QueueTransitionLog, type OwnerNotificationLevel, type QueueTransition, type RecentQueueTransitionScope } from "./queue-transition-log.js";
 import { WAKE_INTENT_PREFIX, type OutboxHandler } from "./outbox-handler.js";
+import type { SendOrigin } from "./session-transport.js";
 import { derivePickup, type PickupReceipt } from "./queue-pickup.js";
 import { lastMeaningfulTransition, readWaitingView, type WaitingView, type WaitingActivityReader } from "./queue-waiting.js";
 import { wrapPaneEnvelope } from "../lib/pane-envelope.js";
@@ -276,7 +277,7 @@ export interface QueueNudgeTransport {
     // (h): stampISO threads the nudge's compose time so the transport's delivered-latency calc can
     // measure the wait for a handoff nudge too (the real impl is SessionTransport, which accepts it).
     text: string,
-    opts?: { verify?: boolean; stampISO?: string; actorSession?: string; committedOutboxIds?: string[]; deliveryId?: string; auditPointer?: string }
+    opts?: { verify?: boolean; stampISO?: string; actorSession?: string; committedOutboxIds?: string[]; deliveryId?: string; auditPointer?: string; origin?: SendOrigin }
   ): Promise<{ ok: boolean; verified?: boolean; error?: string; reason?: string; outcome?: string }>;
 }
 
@@ -1215,6 +1216,7 @@ export class QueueRepository {
     // MF4: send the FROZEN envelope stored on the intent verbatim (no re-resolution).
     const outcome = await this.performWakeSend(
       qitemId, intent.destinationSession, intent.senderSession, undefined, group.map(entry => entry.body).join("\n"), group.map(entry => entry.outboxId),
+      intent.tags?.includes(AUTO_UNPARK_WAKE_TAG) ? { kind: "wake" } : undefined,
     );
     const finalState = outcome.classified === "verified" ? "delivered" : outcome.classified;
     for (const member of group) {
@@ -1383,10 +1385,11 @@ export class QueueRepository {
     nudgeOpt: boolean | undefined,
     sourceSession?: string,
     bodyOverride?: string,
+    origin?: SendOrigin,
   ): Promise<void> {
     if (nudgeOpt === false) return;
     if (!this.transport) return;
-    const outcome = await this.performWakeSend(qitemId, destinationSession, sourceSession, bodyOverride);
+    const outcome = await this.performWakeSend(qitemId, destinationSession, sourceSession, bodyOverride, undefined, undefined, origin);
     this.recordNudgeAttempt(qitemId, outcome.nudgeResult);
   }
 
@@ -1403,6 +1406,12 @@ export class QueueRepository {
    * (the "delivered-ack-pending" nudge literal). It is never promoted to
    * delivered nor demoted to failed.
    */
+  /** A queue nudge's origin: a handoff when the item continues another, else a message from its sender. */
+  private wakeOrigin(qitemId: string, sourceSession?: string): SendOrigin {
+    const kind = this.getById(qitemId)?.handedOffFrom ? "handoff" : "message";
+    return sourceSession ? { kind, fromSession: sourceSession } : { kind };
+  }
+
   private async performWakeSend(
     qitemId: string,
     destinationSession: string,
@@ -1410,6 +1419,7 @@ export class QueueRepository {
     bodyOverride?: string,
     prebuiltText?: string,
     committedOutboxIds?: string[],
+    origin?: SendOrigin,
   ): Promise<{ classified: "verified" | "indeterminate" | "failed" | "retained"; nudgeResult: string }> {
     // DEFECT FIX qitem-20260827065907-b9ae334c (S1-class, 3 live specimens): a virtual
     // @external destination has NO pane — the queue row ITSELF is the gateway
@@ -1469,7 +1479,8 @@ export class QueueRepository {
       text = held.body;
     }
     try {
-      const res = await this.transport!.send(destinationSession, text, { verify: true, stampISO, actorSession: sourceSession, committedOutboxIds, deliveryId: committedOutboxIds ? undefined : deliveryId, auditPointer: qitemId });
+      const res = await this.transport!.send(destinationSession, text, { verify: true, stampISO, actorSession: sourceSession, committedOutboxIds, deliveryId: committedOutboxIds ? undefined : deliveryId, auditPointer: qitemId,
+        origin: origin ?? this.wakeOrigin(qitemId, sourceSession) });
       // OPR.0.3.2.21.FR-4(c) — wording rename: the prior literal
       // "sent-unverified" read as a failure even in the common case
       // (delivery confirmed but the synchronous ack window expired,

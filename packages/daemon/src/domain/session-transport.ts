@@ -1361,7 +1361,16 @@ export function readInputBox(pane: string | null, runtime: "claude-code" | "code
   return boxHoldsText(stripBoxGlyph(pane.split("\n").slice(markerLine! - 1, closingRuleLine! - 1)), text);
 }
 
+/** What a delivery carries and which seat sent it, for a seat kind that shows the two apart. */
+export interface SendOrigin {
+  kind: "handoff" | "message" | "wake" | "watch";
+  /** The sending seat's session, when OpenRig knows one. */
+  fromSession?: string;
+}
+
 export interface SendOpts {
+  /** Internal: set where OpenRig delivers (queue nudges, wakes, watchdog fires); never client-supplied. */
+  origin?: SendOrigin;
   /** Internal managed lifecycle prerequisite; never accepted from HTTP send options. */
   beforeWrite?: () => void;
   /** Stable caller request ID, reused for readback after transport uncertainty. */
