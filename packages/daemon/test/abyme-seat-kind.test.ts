@@ -328,6 +328,16 @@ describe("the abyme routes", () => {
     expect(later.seats.map((s) => s.session)).toEqual([build.sessionName]);
   });
 
+  it("reads a rigspec as JSON, and answers why one does not read", async () => {
+    const yaml = "version: \"0.2\"\nname: demo\npods:\n  - id: dev\n    label: Dev\n    members:\n      - id: build\n        agent_ref: \"local:agents/worker\"\n        runtime: claude-code\n    edges: []\nedges: []\n";
+    const ok = await app.request("/api/abyme/spec", { method: "POST", body: yaml });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toMatchObject({ spec: { name: "demo", pods: [{ id: "dev", members: [{ id: "build", agent_ref: "local:agents/worker", runtime: "claude-code" }] }] } });
+    const bad = await app.request("/api/abyme/spec", { method: "POST", body: "name: [unclosed" });
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toBeTruthy();
+  });
+
   it("reads a rig's flow: pods, seats, edges, work, transitions and watches", async () => {
     const { rig, pod, build: buildNode, review: reviewNode } = makeRig();
     const build = await launch(rig.id, "dev.build", rig.name);

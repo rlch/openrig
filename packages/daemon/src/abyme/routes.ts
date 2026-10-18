@@ -12,6 +12,7 @@ import { deriveCanonicalSessionName, deriveSessionName, validateSessionName } fr
 import { QueueWakeRepository } from "../domain/queue-wake-repository.js";
 import { nextDueAt } from "../domain/watchdog-due.js";
 import { WatchdogJobsRepository } from "../domain/watchdog-jobs-repository.js";
+import { RigSpecCodec } from "../domain/rigspec-codec.js";
 import { ABYME_KIND, type AbymeSeatKind } from "./seat-kind.js";
 
 export interface AbymeRouteDeps {
@@ -74,6 +75,16 @@ export function abymeRoutes(deps: AbymeRouteDeps): Hono {
       JOIN nodes n ON n.id = s.node_id ORDER BY n.rig_id, s.session_name`).all() as
       Array<{ session_name: string; node_id: string; rig_id: string; agent_id: string }>;
     return c.json(rows.map((r) => ({ session: r.session_name, nodeId: r.node_id, rigId: r.rig_id, agent: r.agent_id })));
+  });
+
+  // A rigspec as JSON, so the plugin reads a rig file's name and members without a YAML parser of
+  // its own; validating it stays OpenRig's (`/api/rigs/import/validate`).
+  app.post("/spec", async (c) => {
+    try {
+      return c.json({ spec: RigSpecCodec.parse(await c.req.text()) });
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+    }
   });
 
   app.get("/flow", (c) => {
