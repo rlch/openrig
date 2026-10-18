@@ -220,6 +220,13 @@ interface DaemonOptions {
   /** Seat kinds beyond tmux, for an embedder whose seats run somewhere other than a tmux pane.
    *  Keyed by `bindings.attachment_type`; none by default. */
   seatKinds?: readonly SeatKind[];
+  /** Called with the migrated database before anything reads it (boot reconcile included), so an
+   *  embedder's seat kind can keep its own rows next to OpenRig's. */
+  onDatabase?: (db: Database.Database) => void;
+  /** The seat kind a launch takes when it names none (rig up, seat start); absent = tmux. */
+  defaultSeatKind?: AttachmentKind;
+  /** An embedder's own routes, mounted ahead of the `/api/*` not-found fallback. Keyed by path. */
+  routes?: (deps: AppDeps) => Record<string, Hono>;
 }
 
 interface DaemonResult {
@@ -314,6 +321,7 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
   const dbPath = opts?.dbPath ?? ":memory:";
   const db = createDb(dbPath);
   migrate(db, ALL_MIGRATIONS);
+  opts?.onDatabase?.(db);
 
   // 51-09 increment 1 — establish the daemon's durable self-host identity at
   // boot (mint on first boot, reconcile thereafter). host.name is a display-only
@@ -644,6 +652,7 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
     runtimeSessionEnv,
     tmuxOptionDefaults,
     seatKinds,
+    ...(opts?.defaultSeatKind ? { defaultSeatKind: opts.defaultSeatKind } : {}),
   });
 
   const snapshotRepo = new SnapshotRepository(db);
@@ -2583,6 +2592,7 @@ export async function createDaemon(opts?: DaemonOptions): Promise<DaemonResult> 
   deps.webUiEnabled = opts?.webUiEnabled ?? new ContextPackSettingsStore().resolveOne("ui.enabled").value === true;
   // /api browser boundary: this machine's exact Tailscale MagicDNS name, looked up on demand.
   deps.selfNameDiscovery = () => discoverTailscaleSelfNames({ timeoutMs: 1500 });
+  if (opts?.routes) deps.embedderRoutes = opts.routes(deps);
   const { app, injectWebSocket } = createAppWithWebSocket(deps);
 
   return { app, db, deps, contextMonitor, eventLoopMonitor, injectWebSocket };

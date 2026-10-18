@@ -71,6 +71,8 @@ interface NodeLauncherDeps {
   tmuxOptionDefaults?: TmuxOptionDefaultsApplier;
   /** Seat kinds registered beyond tmux; absent = none. */
   seatKinds?: SeatKindRegistry;
+  /** The kind a launch takes when it names none; absent = tmux. */
+  defaultSeatKind?: AttachmentKind;
 }
 
 export class NodeLauncher {
@@ -86,6 +88,7 @@ export class NodeLauncher {
   private defaultSilenceWindowSeconds: number;
   private tmuxSeatHost: TmuxSeatHost;
   private seatKinds: SeatKindRegistry | null;
+  private defaultSeatKind: AttachmentKind | null;
 
   constructor(deps: NodeLauncherDeps) {
     // Hard runtime invariant: all domain services must share the same db handle.
@@ -116,6 +119,7 @@ export class NodeLauncher {
       tmuxOptionDefaults: deps.tmuxOptionDefaults ?? null,
     });
     this.seatKinds = deps.seatKinds ?? null;
+    this.defaultSeatKind = deps.defaultSeatKind ?? null;
   }
 
   async launchNode(
@@ -174,9 +178,10 @@ export class NodeLauncher {
       OPENRIG_OCCUPANT_GENERATION: occupantGeneration ?? undefined,
     });
     const openRigEnv = launchEnv(opts?.env);
-    const kind = opts?.kind && opts.kind !== "tmux" ? this.seatKinds?.custom(opts.kind) ?? null : null;
-    if (opts?.kind && opts.kind !== "tmux" && !kind) {
-      return { ok: false, code: "seat_kind_unknown", message: `No seat kind '${opts.kind}' is registered with this daemon` };
+    const requested = opts?.kind ?? this.defaultSeatKind;
+    const kind = requested && requested !== "tmux" ? this.seatKinds?.custom(requested) ?? null : null;
+    if (requested && requested !== "tmux" && !kind) {
+      return { ok: false, code: "seat_kind_unknown", message: `No seat kind '${requested}' is registered with this daemon` };
     }
     const host: SeatHost = kind?.host ?? this.tmuxSeatHost;
     const seatRef = { nodeId: node.id, sessionName, runtime: node.runtime ?? null, kind: kind?.kind ?? "tmux", pane: null, occupant: null };

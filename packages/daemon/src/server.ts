@@ -160,6 +160,8 @@ export interface AppDeps {
   tmuxAdapter: TmuxAdapter;
   /** Seat kinds registered beyond tmux (`createDaemon({ seatKinds })`); absent = none. */
   seatKinds?: import("./domain/seat-kinds.js").SeatKindRegistry;
+  /** An embedder's routes (`createDaemon({ routes })`), mounted ahead of the `/api/*` fallback. */
+  embedderRoutes?: Record<string, Hono>;
   /** OPR.0.4.6.02 S1 — the shared tmux option-defaults applier, exposed to
    *  the seat-handover route so a fresh successor gets launch-only defaults. */
   tmuxOptionDefaults?: TmuxOptionDefaultsApplier;
@@ -845,6 +847,8 @@ export function createApp(deps: AppDeps): Hono {
     "/api/rig-mode",
     rigModeRoutes({ bearerToken: deps.missionControlBearerToken ?? null }),
   );
+
+  for (const [path, routes] of Object.entries(deps.embedderRoutes ?? {})) app.route(path, routes);
 
   app.all("/api/*", async (c, next) => {
     if (c.req.path === "/api") return next();

@@ -243,7 +243,17 @@ async function isTrustedLocalOrTailnetBind(host: string): Promise<boolean> {
   return false;
 }
 
-export async function startServer(port?: number) {
+/** What an embedder (the fork's `abyme.ts` entry) adds to a daemon it starts itself. */
+export interface EmbedOptions {
+  seatKinds?: readonly import("./domain/seat-kinds.js").SeatKind[];
+  onDatabase?: (db: import("better-sqlite3").Database) => void;
+  defaultSeatKind?: string;
+  routes?: (deps: import("./server.js").AppDeps) => Record<string, import("hono").Hono>;
+  /** Seats without panes: start none of the tmux pollers (seat activity, pane structure, identity). */
+  paneless?: boolean;
+}
+
+export async function startServer(port?: number, embed?: EmbedOptions) {
   const p = port ?? parseInt(readOpenRigEnv("OPENRIG_PORT", "RIGGED_PORT") ?? "7433", 10);
   // D15 — anchor the default db under OPENRIG_HOME, never a bare CWD-relative
   // filename (which could open the shared fleet db). Explicit OPENRIG_DB wins.
@@ -314,6 +324,10 @@ export async function startServer(port?: number) {
     // S20 — the effective bind plan rides the health surface so adoption gates verify
     // listeners from BINDING EVIDENCE (probe each host) instead of config echo.
     bindPlan,
+    ...(embed?.seatKinds ? { seatKinds: embed.seatKinds } : {}),
+    ...(embed?.onDatabase ? { onDatabase: embed.onDatabase } : {}),
+    ...(embed?.defaultSeatKind ? { defaultSeatKind: embed.defaultSeatKind } : {}),
+    ...(embed?.routes ? { routes: embed.routes } : {}),
   });
 
   // Multi-bind via N serve() instances sharing the same Hono app.
@@ -345,13 +359,15 @@ export async function startServer(port?: number) {
         // Polls every running tmux-bound seat's window_activity timestamp so
         // PsProjectionService + node-inventory enrichment serve
         // fresh data on each request.
-        deps.seatActivityService?.start(deps.rigRepo.db);
-        // 5b82324b — the structural pane-activity cache, on the same 1Hz cadence.
-        deps.seatStructuralActivityService?.start(deps.rigRepo.db);
-        // OPR.0.4.3.19 — start the liveness identity reconciler (5s default).
-        // Persists the per-seat pane PID/command verdict so node-inventory
-        // gates the running/active projection on verified process identity.
-        deps.seatIdentityReconciler?.start();
+        if (!embed?.paneless) {
+          deps.seatActivityService?.start(deps.rigRepo.db);
+          // 5b82324b — the structural pane-activity cache, on the same 1Hz cadence.
+          deps.seatStructuralActivityService?.start(deps.rigRepo.db);
+          // OPR.0.4.3.19 — start the liveness identity reconciler (5s default).
+          // Persists the per-seat pane PID/command verdict so node-inventory
+          // gates the running/active projection on verified process identity.
+          deps.seatIdentityReconciler?.start();
+        }
         startPeriodicSnapshotScheduler(deps);
         // OPR.0.4.6.FS-1 W2 — boot sweep + daily retention tick (bounded,
         // yields between batches; a sweep failure is logged, never fatal).
