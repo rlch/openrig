@@ -346,8 +346,11 @@ export class StartupOrchestrator {
     // replay plan, not a newly selected profile with activity hooks removed.
     // RestoreOrchestrator already reconciled the saved activity selection before
     // native resume. Fresh launches still project empty plans to support removal.
+    // A registered kind's seat has no harness OpenRig set up: the adapter's files would land in the
+    // seat's cwd and home, so projection and file provisioning are its host's concern, not ours.
+    const customKind = this.seatKinds?.custom(input.binding.attachmentType) ?? null;
     let projectionResult: ProjectionResult;
-    if (!(input.preserveStartupContext && input.adapter.runtime === "claude-code" && input.plan.entries.length === 0)) try {
+    if (!customKind && !(input.preserveStartupContext && input.adapter.runtime === "claude-code" && input.plan.entries.length === 0)) try {
       projectionResult = await input.adapter.project(input.plan, input.binding);
       warnings.push(...(projectionResult.warnings ?? []));
       if (projectionResult.failed.length > 0) {
@@ -388,7 +391,7 @@ export class StartupOrchestrator {
 
     // 4. Deliver pre-launch files (filesystem: guidance_merge, skill_install)
     // Always call even with empty list so adapters can provision runtime-specific config (e.g. context collectors)
-    try {
+    if (!customKind) try {
       const deliveryResult = await input.adapter.deliverStartup(preLaunchFiles, input.binding);
       warnings.push(...(deliveryResult.warnings ?? []));
       if (deliveryResult.failed.length > 0) {
@@ -631,7 +634,9 @@ export class StartupOrchestrator {
           const failure = await this.sendInteractiveText(deliveryInput, content, "post_launch_file");
           if (failure) throw new Error(failure.error);
         } : undefined;
-        const deliveryResult = await input.adapter.deliverStartup(postLaunchFiles, input.binding, checkedSend);
+        const deliveryResult = customKind
+          ? await this.deliverFilesAsText(deliveryInput, postLaunchFiles)
+          : await input.adapter.deliverStartup(postLaunchFiles, input.binding, checkedSend);
         warnings.push(...(deliveryResult.warnings ?? []));
         if (deliveryResult.failed.length > 0) {
           for (const f of deliveryResult.failed) {
@@ -794,6 +799,19 @@ export class StartupOrchestrator {
     });
     return { ok: false, startupStatus: status, errors, evidence, ...(recovery ? { recovery } : {}),
       ...(missingConversation ? { missingConversation: true as const } : {}) };
+  }
+
+  /** A registered kind's seat: each send_text file goes through its inbound as one message. */
+  private async deliverFilesAsText(input: StartupDeliveryInput, files: ResolvedStartupFile[]): Promise<StartupDeliveryResult> {
+    let delivered = 0;
+    const failed: Array<{ path: string; error: string }> = [];
+    for (const file of files) {
+      const content = this.safeReadFile(file.absolutePath);
+      const failure = content ? await this.sendInteractiveText(input, content, "post_launch_file") : { error: "unreadable or empty" };
+      if (!failure) delivered += 1;
+      else if (file.required) failed.push({ path: file.path, error: failure.error });
+    }
+    return { delivered, failed };
   }
 
   private async executeActions(
