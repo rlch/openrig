@@ -9,4 +9,7 @@ export default {
   },
   // The daemon's typecheck and tests, the gate a change to it passes before landing.
   "daemon-check": { cmd: "npx tsc -p packages/daemon --noEmit && npm test -w packages/daemon" },
+  // The live page of rig `abyme`: rewrites ~/.local/state/abyme/documents/openrig/rig-abyme.md each
+  // minute from the daemon on :7439 (pods, seats, edges, work), each seat's activity a live query.
+  "rig-page": { cmd: "node .abyme/rig-page.mjs --watch --rig abyme --daemon http://127.0.0.1:7439" },
 } satisfies ProcessFile;

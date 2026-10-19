@@ -215,12 +215,13 @@ describe("the abyme daemon entry", () => {
     await new Promise((r) => setTimeout(r, 3000));
     expect(tree(cwd)).toEqual(before);
 
-    // Down, then up by name: a restore, as on the live rig. It starts through the plugin too.
+    // Down, then up by name: a restore, as on the live rig. With no --fresh it relaunches both seats
+    // fresh (an abyme agent has no resume token), through the plugin.
     const down = await fetch(`${base}/api/down`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ rigId }) });
     expect(down.status, await down.clone().text()).toBeLessThan(300);
     pluginCalls.length = 0;
     const again = await fetch(`${base}/api/up`, { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sourceRef: "cwdrig", autoApprove: true, freshLogicalIds: ["dev.build", "dev.review"] }) });
+      body: JSON.stringify({ sourceRef: "cwdrig", autoApprove: true }) });
     const againBody = await again.text();
     expect(again.status, againBody).toBeLessThan(300);
     expect(againBody).not.toContain("No tmux session bound");

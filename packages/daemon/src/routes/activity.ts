@@ -3,6 +3,7 @@ import { Hono, type Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { AgentActivityStore } from "../domain/agent-activity-store.js";
 import type { SessionRegistry } from "../domain/session-registry.js";
+import type { SeatKindRegistry } from "../domain/seat-kinds.js";
 import type { EventBus } from "../domain/event-bus.js";
 import { verifyStartupProof } from "../domain/startup-proof.js";
 import type { ActivityEvidence } from "../domain/activity-taxonomy.js";
@@ -142,6 +143,25 @@ activityRoutes.post("/pi-usage-charges", async (c) => {
     { seatSession: req.seat.sessionName, piSessionId: req.piSessionId, charges: valid }, new Date().toISOString());
   return c.json({ ok: true, ...result, rejected: charges.length - valid.length });
 });
+
+/** A registered seat kind's seat (createDaemon({ seatKinds })) has no pane lineage: its host attests
+ *  who holds it and posts for that holder, so a post that names no generation is the live
+ *  occupant's. Null for every other seat, which keeps carrying its own generation. */
+function registeredKindGeneration(c: Context, sessionName: string | null, nodeId: string | null): string | null {
+  const seatKinds = c.get("seatKinds" as never) as SeatKindRegistry | undefined;
+  const sessionRegistry = c.get("sessionRegistry" as never) as SessionRegistry | undefined;
+  if (!seatKinds?.hasCustom() || !sessionRegistry || (!sessionName && !nodeId)) return null;
+  try {
+    const row = sessionRegistry.db.prepare(`SELECT b.node_id, b.attachment_type FROM bindings b
+      JOIN sessions s ON s.node_id = b.node_id
+      WHERE ${sessionName ? "b.external_session_name = ?" : "b.node_id = ?"} ORDER BY s.id DESC LIMIT 1`)
+      .get(sessionName ?? nodeId) as { node_id: string; attachment_type: string | null } | undefined;
+    if (!row || !seatKinds.custom(row.attachment_type)) return null;
+    return sessionRegistry.currentOccupantTenure(row.node_id)?.generationUuid ?? null;
+  } catch {
+    return null;
+  }
+}
 
 activityRoutes.post("/hooks", async (c) => {
   const store = c.get("agentActivityStore" as never) as AgentActivityStore | undefined;
@@ -382,7 +402,7 @@ activityRoutes.post("/hooks", async (c) => {
     // W2a-1 — source-bound emitting generation, carried by managed launch/fresh-handover producers.
     // Legacy, excluded, or no-tenure emitting paths may omit it ⇒ stamped null ⇒ unresolved at read
     // (sound per-path absence; never false-fresh).
-    generation: stringOrNull(body.generation),
+    generation: stringOrNull(body.generation) ?? registeredKindGeneration(c, stringOrNull(body.sessionName), stringOrNull(body.nodeId)),
     turnId: stringOrNull(body.turnId),
   });
 

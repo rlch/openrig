@@ -260,6 +260,10 @@ describe("the abyme seat kind", () => {
     });
     expect((await post("active")).status).toBeLessThan(300);
     expect((await kind.activity.probe(ref, new Date())).state).toBe("running");
+    // OpenRig's own store credits it to the seat's live occupant, not "generation unverifiable".
+    const stored = deps.agentActivityStore!.getLatestForNode({ sessionName: build.sessionName });
+    expect(stored?.state, JSON.stringify(stored)).toBe("running");
+    expect(stored?.generation).toBe(deps.sessionRegistry.currentOccupantTenure(node.id)?.generationUuid);
     await post("Notification", "permission_prompt");
     expect((await kind.activity.probe(ref, new Date())).state).toBe("needs_input");
     await post("idle");
@@ -296,6 +300,8 @@ describe("the abyme routes", () => {
     expect(await res.json()).toEqual({ nodeId: review.id, session: `dev-review@${rig.name}` });
     expect(plugin.calls).toEqual([]);
     expect(deps.sessionRegistry.getBindingForNode(review.id)).toMatchObject({ attachmentType: "abyme", externalSessionName: `dev-review@${rig.name}` });
+    // No native resume token to go back to: a restore relaunches it fresh without asking.
+    expect(db.prepare("SELECT restore_policy FROM sessions WHERE session_name = ?").get(`dev-review@${rig.name}`)).toEqual({ restore_policy: "relaunch_fresh" });
 
     const seats = await (await app.request("/api/abyme/seats")).json() as unknown[];
     expect(seats).toContainEqual({ session: `dev-review@${rig.name}`, nodeId: review.id, rigId: rig.id, agent: "acp:running" });

@@ -104,7 +104,14 @@ export class AbymeSeatKind implements SeatKind {
       db.prepare(`INSERT OR REPLACE INTO abyme_seat_log (session_name, rig_id, node_id, member, pod_id)
         SELECT ?, rig_id, id, logical_id, pod_id FROM nodes WHERE id = ?`).run(seat.session, seat.nodeId);
       if (rig?.space) db.prepare("INSERT OR REPLACE INTO abyme_rigs (rig_id, space_id) VALUES (?, ?)").run(rig.rigId, rig.space);
+      this.markRelaunchFresh(seat.nodeId, seat.session);
     })();
+  }
+
+  /** An abyme agent has no native resume token for OpenRig to go back to, so a restore relaunches
+   *  the seat fresh instead of stopping to ask. Set on the seat's session once it exists. */
+  private markRelaunchFresh(nodeId: string, session: string): void {
+    this.database.prepare("UPDATE sessions SET restore_policy = 'relaunch_fresh' WHERE node_id = ? AND session_name = ?").run(nodeId, session);
   }
 
   private forgetSeat(session: string): void {
@@ -139,7 +146,10 @@ export class AbymeSeatKind implements SeatKind {
     },
 
     // The agent started in `create`; there is no harness for OpenRig to launch.
-    launch: async () => ({ ok: true as const }),
+    launch: async (binding: { nodeId: string; externalSessionName?: string | null }, _adapter: unknown, opts: { name: string }) => {
+      this.markRelaunchFresh(binding.nodeId, binding.externalSessionName ?? opts.name);
+      return { ok: true as const };
+    },
 
     checkReady: async (binding: { externalSessionName?: string | null }) => {
       const probe = await this.host.probe({ sessionName: binding.externalSessionName ?? "" } as SeatRef);
