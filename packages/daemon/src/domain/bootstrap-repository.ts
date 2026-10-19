@@ -53,6 +53,11 @@ export class BootstrapRepository {
     return rows.map((r) => this.rowToRun(r));
   }
 
+  /** The rig a run made, recorded as soon as it exists: kept whatever status the run ends in. */
+  setRunRig(id: string, rigId: string): void {
+    this.db.prepare("UPDATE bootstrap_runs SET rig_id = ? WHERE id = ?").run(rigId, id);
+  }
+
   updateRunStatus(id: string, status: BootstrapStatus, opts?: { rigId?: string; appliedAt?: string }): void {
     if (opts?.rigId) {
       this.db.prepare("UPDATE bootstrap_runs SET status = ?, rig_id = ?, applied_at = ? WHERE id = ?")

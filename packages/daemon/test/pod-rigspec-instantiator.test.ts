@@ -1140,6 +1140,21 @@ profiles:
     db.close();
   });
 
+  it("names the rig to its caller once the rig exists, before anything is launched", async () => {
+    const { db, inst } = setup();
+    const yaml = RigSpecCodec.serialize(makeRigSpec({ name: "named-rig" }));
+    const created: string[] = [];
+    let atHook: string[] = [];
+    const result = await inst.instantiate(yaml, RIG_ROOT, {
+      created: (id) => created.push(id),
+      prelaunchHook: async () => { atHook = [...created]; return { ok: false, code: "service_boot_failed", message: "refused", retainRig: true }; },
+    });
+    expect(result.ok).toBe(false);
+    expect(atHook).toHaveLength(1);
+    expect(created).toEqual(atHook);
+    db.close();
+  });
+
   it.each(["boot-failure", "node-failure", "boot-cleanup-failure", "node-cleanup-failure", "inherited", "inherited-boot-failure"].flatMap(scenario =>
     (["leave_running", "down_and_volumes"] as const).map(policy => ({ scenario, policy })),
   ))("retains or cleans up the actual service project on failed instantiation ($scenario, $policy)", async ({ scenario, policy }) => {

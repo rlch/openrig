@@ -228,6 +228,18 @@ describe("BootstrapOrchestrator", () => {
     expect(instantiate).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ nonInterruptive: expected }));
   });
 
+  it("a failed pod import that kept its rig records the rig on its run", async () => {
+    const instantiate = vi.fn(async (_yaml: string, _root: string, o: { created?: (rigId: string) => void }) => {
+      o.created?.("kept-rig");
+      return { ok: false as const, code: "instantiate_error" as const, message: "all node launches/startups failed" };
+    });
+    const orch = buildOrchestrator({ podInstantiator: { db, instantiate } });
+    const yaml = `version: "0.2"\nname: kept\npods: [{id: dev, label: Dev, members: [{id: shell, agent_ref: "builtin:terminal", runtime: terminal, profile: none, cwd: .}], edges: []}]\nedges: []\n`;
+    const result = await orch.bootstrap({ mode: "apply", sourceRef: writeSpec(yaml), autoApprove: true });
+    expect(result.status).toBe("failed");
+    expect(new BootstrapRepository(db).getRun(result.runId)).toMatchObject({ status: "failed", rigId: "kept-rig" });
+  });
+
   // T1: Plan mode returns plan, 0 bootstrap_actions rows
   it("plan mode returns plan with zero bootstrap_actions rows", async () => {
     const specPath = writeSpec(SIMPLE_SPEC_YAML);
