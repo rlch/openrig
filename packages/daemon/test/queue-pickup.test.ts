@@ -66,6 +66,28 @@ describe("S04 pickup receipts — derived, visible, threshold-honest", () => {
     return repo.create({ sourceSession: "a@r", destinationSession: "worker@r", body: "work" });
   }
 
+  /** The holder's activity as the oracle answers it, `changedAt` minutes ago. */
+  function holder(activity: "working" | "idle-at-prompt", minutesAgo: number): void {
+    const changedAt = new Date(Date.now() - minutesAgo * 60_000).toISOString();
+    repo.attachActivityReader(() => ({ activity, needsInput: { count: 0, reason: null }, decidedBy: "lifecycle-hooks", changedAt }));
+  }
+
+  it("A HOLDER'S IDLE: working past the threshold reads working; idle just now after long work reads working; idle past it stalls, naming the idle minutes, and only that routes a finding", async () => {
+    const { stalledPickupFinding } = await import("../src/domain/queue-pickup.js");
+    const row = await mkRow();
+    repo.claim({ qitemId: row.qitemId, destinationSession: "worker@r" });
+    ageClaim(row.qitemId, 20);
+    holder("working", 19);
+    expect(pickupOf(repo.getById(row.qitemId)!)?.state).toBe("working");
+    expect(stalledPickupFinding(repo.getById(row.qitemId)!)).toBeNull();
+    holder("idle-at-prompt", 10 / 60);
+    expect(pickupOf(repo.getById(row.qitemId)!)?.state).toBe("working");
+    expect(stalledPickupFinding(repo.getById(row.qitemId)!)).toBeNull();
+    holder("idle-at-prompt", 4);
+    expect(pickupOf(repo.getById(row.qitemId)!)).toMatchObject({ state: "stalled-after-claim", evidence: expect.stringMatching(/idle at its prompt for 4 min/) });
+    expect(stalledPickupFinding(repo.getById(row.qitemId)!)).toMatchObject({ kind: "stalled-after-claim", target: "worker@r" });
+  });
+
   it("UNCLAIMED: a never-claimed row reads pickup.state=unclaimed on the getById projection", async () => {
     const row = await mkRow();
     const item = repo.getById(row.qitemId)!;

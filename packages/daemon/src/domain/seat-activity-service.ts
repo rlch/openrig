@@ -561,7 +561,7 @@ export class SeatActivityService {
       if (!evd || evd.activity === undefined) continue;
       // A positive-only rung answers only "working"; its silence leaves the state to the rungs below, or unknown.
       if (trust === "positive-only" && evd.activity !== "working") continue;
-      if (rung === "lifecycle-hooks" && nowMs - Date.parse(evd.observedAt) > HOOK_AUTHORITY_WINDOW_MS) continue;
+      if (rung === "lifecycle-hooks" && hookExpired(evd, nowMs)) continue;
       return evd;
     }
     return null;
@@ -597,8 +597,7 @@ export class SeatActivityService {
     const hook = this.latestByRung(seat, "lifecycle-hooks", "activity");
     const sampler = this.latestByRung(seat, "window-sampling", "activity");
     const nowMs = this.now().getTime();
-    const hookFresh = hook && hook.activity !== undefined
-      && nowMs - Date.parse(hook.observedAt) <= HOOK_AUTHORITY_WINDOW_MS;
+    const hookFresh = hook && hook.activity !== undefined && !hookExpired(hook, nowMs);
     const contradicts = hookFresh && hook!.activity === "working"
       && sampler?.activity === "idle-at-prompt"
       && this.rungTrust(seat, "window-sampling") === "authoritative";
@@ -774,6 +773,11 @@ interface SeatLadderState {
 // requires the numbers recorded; rationale in the GREEN commit + reference doc):
 /** Hook evidence older than this no longer decides working/idle (time-bounded authority). */
 export const HOOK_AUTHORITY_WINDOW_MS = 15_000;
+/** Whether hook evidence no longer decides working/idle: past the window, unless its source holds
+ *  it until its next report (fork branch `abyme`: an abyme seat's status, posted once per change). */
+function hookExpired(evd: ActivityEvidence, nowMs: number): boolean {
+  return !evd.holds && nowMs - Date.parse(evd.observedAt) > HOOK_AUTHORITY_WINDOW_MS;
+}
 /** Persistent hook-vs-sampler contradiction beyond this window degrades the hook rung. */
 export const CROSS_RUNG_CONTRADICTION_WINDOW_MS = 10_000;
 /** Sampling-decided working→idle needs this many consecutive idle evaluations… */

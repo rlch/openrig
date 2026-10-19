@@ -54,6 +54,9 @@ export interface PickupFacts {
   postClaimMotionCount: number;
   lastMeaningfulAt?: string;
   activity?: string;
+  /** When the holder's activity last changed (the oracle's changedAt). Idle at its prompt, that is
+   *  when it stopped working: its stall counts from then, never from a claim it worked through. */
+  activityChangedAt?: string;
   needsInput?: number;
   now?: Date;
   thresholdMinutes?: number;
@@ -77,15 +80,20 @@ export function derivePickup(facts: PickupFacts): PickupReceipt {
   // Legacy callers without a timestamp retain their historical count contract.
   if (facts.lastMeaningfulAt === undefined && (facts.postClaimMotionCount > 0 || heartbeatAfterClaim)) return { state: "working" };
   const thresholdMs = (facts.thresholdMinutes ?? resolvePickupThresholdMinutes()) * 60_000;
-  const anchor = Math.max(claimedMs, Date.parse(facts.lastMeaningfulAt ?? facts.claimedAt), heartbeatAfterClaim ? Date.parse(facts.lastHeartbeat!) : claimedMs);
+  const queueMs = Math.max(claimedMs, Date.parse(facts.lastMeaningfulAt ?? facts.claimedAt), heartbeatAfterClaim ? Date.parse(facts.lastHeartbeat!) : claimedMs);
+  const idleSinceMs = facts.activity === "idle-at-prompt" && facts.activityChangedAt ? Date.parse(facts.activityChangedAt) : NaN;
+  const anchor = Number.isFinite(idleSinceMs) ? Math.max(queueMs, idleSinceMs) : queueMs;
   const ageMs = now.getTime() - anchor;
   if (ageMs <= thresholdMs) return { state: "working" };
   const minutes = Math.floor(ageMs / 60_000);
+  const queueMinutes = Math.floor((now.getTime() - queueMs) / 60_000);
   return {
     state: "stalled-after-claim",
     evidence: facts.lastMeaningfulAt === undefined
       ? `claimed ${minutes} min ago, zero substantive transitions since`
-      : `no meaningful queue change for ${minutes} min; owner activity ${facts.activity ?? "unknown"} (queue age does not prove idle)`,
+      : Number.isFinite(idleSinceMs)
+        ? `owner idle at its prompt for ${Math.floor((now.getTime() - idleSinceMs) / 60_000)} min; no meaningful queue change for ${queueMinutes} min`
+        : `no meaningful queue change for ${minutes} min; owner activity ${facts.activity ?? "unknown"} (queue age does not prove idle)`,
   };
 }
 

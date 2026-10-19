@@ -41,12 +41,13 @@ function activity(state: AgentActivity["state"], atMs: number, reason = "turn bo
 const closeDbs: Array<() => void> = [];
 afterEach(() => { for (const close of closeDbs.splice(0)) close(); });
 
-function makeApp(clock: { now: number }) {
+function makeApp(clock: { now: number }, kind?: string) {
   const db = createFullTestDb();
   closeDbs.push(() => db.close());
   db.prepare("INSERT INTO rigs (id, name) VALUES (?, ?)").run("rig-ing-1", "ingest-fixture");
   db.prepare("INSERT INTO nodes (id, rig_id, logical_id, runtime) VALUES (?, ?, ?, ?)")
     .run(SEAT, "rig-ing-1", "dev.qa", "claude-code");
+  if (kind) db.prepare("INSERT INTO bindings (id, node_id, attachment_type) VALUES (?, ?, ?)").run("b-ing-1", SEAT, kind);
   const registry = new SessionRegistry(db);
   const session = registry.registerSession(SEAT, SESSION);
   registry.updateStatus(session.id, "running");
@@ -150,6 +151,23 @@ describe("S19 A4 — the route feeds the ONE oracle (trace: one arbitration poin
     const s = svc.getSeatState(SEAT)!;
     expect(s.activity).toBe("working");
     expect(s.decidedBy).toBe("window-sampling"); // rung-stale = fell through; the relay's death never freezes state
+  });
+
+  it("an abyme seat's posted status holds until abyme's next post; a tmux seat's hook still expires", async () => {
+    // abyme posts a seat's status once per change, so a 6-minute turn is one `running` post.
+    const clock = { now: 2_000_000 };
+    const abyme = makeApp(clock, "abyme");
+    await abyme.post("UserPromptSubmit", "running");
+    clock.now += 4 * 60_000;
+    expect(abyme.svc.getSeatState(SEAT)!.activity).toBe("working");
+    await abyme.post("Stop", "idle");
+    expect(abyme.svc.getSeatState(SEAT)!.activity).toBe("idle-at-prompt");
+
+    const tmuxClock = { now: 2_000_000 };
+    const tmux = makeApp(tmuxClock, "tmux");
+    await tmux.post("UserPromptSubmit", "running");
+    tmuxClock.now += HOOK_AUTHORITY_WINDOW_MS + 5_000;
+    expect(tmux.svc.getSeatState(SEAT)!.activity).toBe("unknown");
   });
 
   it("chrome outranks hooks-carried needs-input when both exist", async () => {

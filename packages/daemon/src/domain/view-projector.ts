@@ -201,7 +201,7 @@ export class ViewProjector {
         const activity = this.executionDeps?.seatActivity?.getSeatStateBySession(String(r.destination_session));
         const receipt = derivePickup({
           lastMeaningfulAt: lastMeaningfulTransition(this.db, String(r.qitem_id))?.at,
-          activity: activity?.activity, needsInput: activity?.needsInput.count,
+          activity: activity?.activity, activityChangedAt: activity?.changedAt, needsInput: activity?.needsInput.count,
           state: String(r.state),
           claimedAt: (r.claimed_at as string | null) ?? null,
           lastHeartbeat: (r.last_heartbeat as string | null) ?? null,

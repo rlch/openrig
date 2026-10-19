@@ -125,6 +125,9 @@ export interface ActivityEvidence {
   activity?: ActivityValue;
   needsInput?: NeedsInput;
   permissionRequest?: { id: string };
+  /** Fork branch `abyme`: the source posts once per change, so this evidence stands until its
+   *  next report instead of expiring with the hook window. */
+  holds?: boolean;
 }
 
 /** A visible rung-health transition (AM-1): arbitration can never make a silently-dead

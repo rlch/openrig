@@ -4242,6 +4242,7 @@ export class QueueRepository {
       state: row.state,
       lastMeaningfulAt: meaningful?.at,
       activity: activity?.activity,
+      activityChangedAt: activity?.changedAt,
       needsInput: activity?.needsInput.count,
       claimedAt: row.claimed_at,
       lastHeartbeat: row.last_heartbeat,

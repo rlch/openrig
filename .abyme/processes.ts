@@ -7,4 +7,6 @@ export default {
     cmd: "npm run build -w packages/daemon && node packages/daemon/dist/abyme.js",
     env: { OPENRIG_HOME: "/Users/rjm/.local/share/openrig-abyme", OPENRIG_BIND_HOST: "127.0.0.1" },
   },
+  // The daemon's typecheck and tests, the gate a change to it passes before landing.
+  "daemon-check": { cmd: "npx tsc -p packages/daemon --noEmit && npm test -w packages/daemon" },
 } satisfies ProcessFile;

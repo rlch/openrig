@@ -12,6 +12,7 @@ import { runtimeRungInventory } from "../domain/activity-taxonomy.js";
 import { validateResumeToken } from "../domain/resume-token-validation.js";
 import { claudeHookFromLaunchedProcess, type ClaudeLaunchedProcess, type NativeProcessLister } from "../domain/native-process-lineage.js";
 import { transportSenderSession } from "./require-sender-identity.js";
+import { ABYME_KIND } from "../abyme/seat-kind.js";
 import {
   PiUsageEntriesStore, hasPiUsageChargesTable, hasPiUsageEntriesTable, validPiProviderCharge, validPiUsageFact,
 } from "../domain/pi-usage-entries-store.js";
@@ -31,8 +32,11 @@ export function evidenceFromHookActivity(input: {
   runtime: string | null;
   activity: AgentActivity;
   seq: number;
+  /** Fork branch `abyme`: the seat's status is posted once per change, so it stands until the next. */
+  holds?: boolean;
 }): ActivityEvidence | null {
   const base = {
+    ...(input.holds ? { holds: true } : {}),
     seatNodeId: input.seatNodeId,
     sessionName: input.sessionName,
     rung: "lifecycle-hooks" as const,
@@ -430,6 +434,9 @@ activityRoutes.post("/hooks", async (c) => {
       runtime,
       activity: result.activity,
       seq: nextHookSeq(`${emitted.nodeId}:${runtime ?? "unknown-runtime"}:hooks`),
+      // Fork branch `abyme`: abyme posts an abyme seat's status once per change, never on a beat.
+      holds: (store.db.prepare("SELECT attachment_type FROM bindings WHERE node_id = ?")
+        .get(emitted.nodeId) as { attachment_type: string } | undefined)?.attachment_type === ABYME_KIND,
     });
     if (evidence) oracle.reportEvidence(evidence);
   }
