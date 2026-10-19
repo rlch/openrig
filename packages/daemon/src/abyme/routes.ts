@@ -147,8 +147,12 @@ export function readFlow(db: Database.Database, rig: RigWithRelations, since: st
   const latestSession = db.prepare("SELECT session_name FROM sessions WHERE node_id = ? ORDER BY id DESC LIMIT 1");
 
   const seats: Array<{ nodeId: string; member: string; session: string | null; pod: string | null; agent: string | null; removed?: true }> = rig.nodes.map((node) => {
+    // A seat never launched (`up` with `launch: false`) has the session it will have: the name bind
+    // and a launch give it.
+    const ns = pods.find((p) => p.id === node.podId)?.namespace;
     const session = node.binding?.externalSessionName ?? node.binding?.tmuxSession
-      ?? (latestSession.get(node.id) as { session_name: string } | undefined)?.session_name ?? null;
+      ?? (latestSession.get(node.id) as { session_name: string } | undefined)?.session_name
+      ?? (ns && node.logicalId.startsWith(`${ns}.`) ? deriveCanonicalSessionName(ns, node.logicalId.slice(ns.length + 1), rig.rig.name) : deriveSessionName(rig.rig.name, node.logicalId));
     const agent = session ? (agentOf.get(session) as { agent_id: string } | undefined)?.agent_id ?? null : null;
     return { nodeId: node.id, member: node.logicalId, session, pod: node.podId ?? null, agent };
   });

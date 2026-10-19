@@ -256,6 +256,10 @@ describe("the abyme daemon entry", () => {
     expect(ps.filter((r) => r.name === "quiet-spaces" || r.name === "rig-per-feature").map((r) => r.runningCount)).toEqual([0, 0]);
     expect(ps.some((r) => r.name === "scn-baton" && r.runningCount > 0)).toBe(false);
 
+    // The flow names each unlaunched seat by the session it will have.
+    const flow = await (await fetch(`${base}/api/abyme/flow?rig=${ids["quiet-spaces"]}`)).json() as { seats: Array<{ session: string; agent: string | null }> };
+    expect(flow.seats).toEqual([expect.objectContaining({ session: "dev-worker@quiet-spaces", agent: null })]);
+
     // A name of the wrong shape is refused before anything is made.
     expect((await post("/api/up", { sourceRef: spec, rigName: "two words", launch: false })).status).toBe(400);
 
