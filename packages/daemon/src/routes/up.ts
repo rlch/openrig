@@ -1,5 +1,5 @@
 import nodePath from "node:path";
-import { readSeatEnvOverride } from "../domain/seat-env.js";
+import { normalizeSeatEnv, readSeatEnvOverride, validateSeatEnv } from "../domain/seat-env.js";
 import { Hono } from "hono";
 import { bootstrapFailureResponse } from "./bootstrap-failure-response.js";
 import type { BootstrapOrchestrator } from "../domain/bootstrap-orchestrator.js";
@@ -216,6 +216,16 @@ upRoutes.post("/", async (c) => {
 
   // `rig up --env KEY=VALUE`: environment for this launch only. It is not saved with the rig.
   const envOverride = readSeatEnvOverride(body["envOverride"]);
+  // Fork branch `abyme`: the rig's own name (one spec, many rigs), env saved on every member, and
+  // `launch: false` to record the rig with no seat launched.
+  const rigName = typeof body["rigName"] === "string" && body["rigName"] !== "" ? body["rigName"] : undefined;
+  if (body["rigName"] !== undefined && (!rigName || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(rigName))) {
+    return c.json({ error: "rigName must be letters, digits, '.', '_' and '-'" }, 400);
+  }
+  const envErrors = body["env"] === undefined ? [] : validateSeatEnv(body["env"], "env");
+  if (envErrors.length > 0) return c.json({ error: envErrors.join("; ") }, 400);
+  const savedEnv = body["env"] === undefined ? undefined : normalizeSeatEnv(body["env"]);
+  const launch = body["launch"] === false ? false : undefined;
 
   // Route source — classify raw sourceRef first, only resolve path for file-based kinds
   let sourceKind: string;
@@ -383,6 +393,9 @@ upRoutes.post("/", async (c) => {
         nonInterruptive,
         cwdOverride,
         envOverride,
+        rigName,
+        savedEnv,
+        launch,
         targetRoot,
         runId: run.id,
       });

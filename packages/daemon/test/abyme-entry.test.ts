@@ -235,4 +235,54 @@ describe("the abyme daemon entry", () => {
     await new Promise((r) => child!.once("exit", r));
     expect(tree(fakeHome)).toEqual(homeBefore);
   }, 180_000);
+  it("brings two rigs up from one spec under names of their own, launches none, launches one later with its env, and deletes it", async () => {
+    const port = await freePort();
+    child = run({ PATH: bareEnvPath, HOME: fakeHome, OPENRIG_HOME: openrigHome, OPENRIG_PORT: String(port) });
+    await until(() => /listening on http:\/\/127\.0\.0\.1:/.test(log), 90_000, "the daemon to listen");
+    const base = `http://127.0.0.1:${port}`;
+    const post = (route: string, body: unknown) => fetch(`${base}${route}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    pluginCalls.length = 0;
+
+    const spec = path.join(specDir, "topo-stub-baton.yaml");
+    const ids: Record<string, string> = {};
+    for (const rigName of ["quiet-spaces", "rig-per-feature"]) {
+      const up = await post("/api/up", { sourceRef: spec, autoApprove: true, rigName, env: { ABYME_BRANCH: rigName, ABYME_BASE: "main" }, launch: false });
+      const body = await up.json() as { rigId?: string };
+      expect(up.status, JSON.stringify(body)).toBeLessThan(300);
+      ids[rigName] = body.rigId!;
+    }
+    expect(pluginCalls.filter((c) => c.verb === "start")).toEqual([]);
+    const ps = await (await fetch(`${base}/api/ps`)).json() as Array<{ name: string; runningCount: number }>;
+    expect(ps.filter((r) => r.name === "quiet-spaces" || r.name === "rig-per-feature").map((r) => r.runningCount)).toEqual([0, 0]);
+    expect(ps.some((r) => r.name === "scn-baton" && r.runningCount > 0)).toBe(false);
+
+    // A name of the wrong shape is refused before anything is made.
+    expect((await post("/api/up", { sourceRef: spec, rigName: "two words", launch: false })).status).toBe(400);
+
+    // An hour later: the seat launches with the env its rig was saved with.
+    const launched = await post("/api/abyme/launch", { rigId: ids["quiet-spaces"], member: "dev.worker", rigRoot: specDir });
+    const lb = await launched.json() as { session?: string };
+    expect(launched.status, JSON.stringify(lb)).toBe(200);
+    expect(lb.session).toBe("dev-worker@quiet-spaces");
+    const start = pluginCalls.find((c) => c.verb === "start")!;
+    expect(start.body).toMatchObject({ rigName: "quiet-spaces", session: "dev-worker@quiet-spaces", branch: "quiet-spaces", base: "main" });
+    expect(pluginCalls.some((c) => c.verb === "deliver" && String(c.body.text).includes("# OpenRig default culture"))).toBe(true);
+    // Twice is refused: it is bound.
+    expect((await post("/api/abyme/launch", { rigId: ids["quiet-spaces"], member: "dev.worker", rigRoot: specDir })).status).toBe(409);
+    // The other rig's seat is still one bind may take.
+    const bound = await post("/api/abyme/bind", { rigId: ids["rig-per-feature"], member: "dev.worker", agent: "acp:other" });
+    expect(bound.status, await bound.clone().text()).toBe(200);
+
+    for (const rigId of Object.values(ids)) {
+      const down = await post("/api/down", { rigId, delete: true });
+      expect(down.status, await down.clone().text()).toBeLessThan(300);
+    }
+    expect(pluginCalls.some((c) => c.verb === "stop" && c.body.agent === "acp:e1")).toBe(true);
+    const after = await (await fetch(`${base}/api/ps`)).json() as Array<{ name: string }>;
+    expect(after.map((r) => r.name)).not.toContain("quiet-spaces");
+    expect(after.map((r) => r.name)).not.toContain("rig-per-feature");
+
+    child.kill("SIGTERM");
+    await new Promise((r) => child!.once("exit", r));
+  }, 180_000);
 });

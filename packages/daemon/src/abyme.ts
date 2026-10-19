@@ -33,6 +33,8 @@ async function main(): Promise<void> {
       "/api/abyme": abymeRoutes({
         db: deps.rigRepo.db, kind, rigRepo: deps.rigRepo, sessionRegistry: deps.sessionRegistry, eventBus: deps.eventBus,
         rebindLifecycle: (nodeId) => deps.tmuxAdapter.deliveryGuard?.rebindLifecycle(nodeId),
+        lifecycle: (nodeIds, fn) => deps.tmuxAdapter.deliveryGuard ? deps.tmuxAdapter.deliveryGuard.lifecycle(nodeIds, fn) : fn(),
+        launchRecorded: (rigId, member, rigRoot) => deps.podInstantiator.launchRecorded(rigId, member, rigRoot),
       }),
     }),
     paneless: true,

@@ -41,6 +41,12 @@ export interface BootstrapOptions {
   cwdOverride?: string;
   /** One-off launch env from `rig up --env`; used for this launch only and not saved. */
   envOverride?: SeatEnv;
+  /** Fork branch `abyme`: the rig's name in place of the spec's `name:`. */
+  rigName?: string;
+  /** Fork branch `abyme`: env merged into every member's and saved with it, so a seat launched later has it. */
+  savedEnv?: SeatEnv;
+  /** Fork branch `abyme`: false records the rig, its pods, members and edges, and launches no seat. */
+  launch?: boolean;
   autoApprove?: boolean;
   nonInterruptive?: boolean;
   approvedActionKeys?: string[];
@@ -747,7 +753,7 @@ export class BootstrapOrchestrator {
       if (typeof raw?.["non_interruptive"] === "boolean") declaredNonInterruptive = raw["non_interruptive"];
     } catch { /* The instantiator returns the existing structured validation failure. */ }
     const nonInterruptive = opts.nonInterruptive ?? declaredNonInterruptive ?? (new SettingsStore().resolveOne("launch.non_interruptive").value === true);
-    const outcome = await podInstantiator.instantiate(rigSpecYaml, rigRoot, { nonInterruptive, cwdOverride: opts.cwdOverride, env: opts.envOverride, prelaunchHook, installRoot, created: (rigId) => this.deps.bootstrapRepo.setRunRig(run.id, rigId) });
+    const outcome = await podInstantiator.instantiate(rigSpecYaml, rigRoot, { nonInterruptive, cwdOverride: opts.cwdOverride, env: opts.envOverride, rigName: opts.rigName, savedEnv: opts.savedEnv, launch: opts.launch, prelaunchHook, installRoot, created: (rigId) => this.deps.bootstrapRepo.setRunRig(run.id, rigId) });
     if ((outcome.ok || "rigId" in outcome) && (nonInterruptive || opts.nonInterruptive === false)) warnings.push(nonInterruptiveSummary(nonInterruptive));
     const withRouting = (r: BootstrapResult): BootstrapResult => (bundleRouting ? { ...r, bundleRouting } : r);
 

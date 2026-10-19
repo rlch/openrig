@@ -1,5 +1,6 @@
 // Fork branch `abyme` only: the daemon routes the openrig plugin reads and writes (loopback only).
 //   POST /api/abyme/bind  { rigId, member, agent } -> { nodeId, session }
+//   POST /api/abyme/launch { rigId, member, rigRoot } -> { nodeId, session }: a seat `up` recorded unlaunched
 //   GET  /api/abyme/seats                          -> [{ session, nodeId, rigId, agent }]
 //   GET  /api/abyme/flow?rig=<id>&since=<iso>      -> one rig's seats, edges, work and its history
 import nodePath from "node:path";
@@ -23,6 +24,10 @@ export interface AbymeRouteDeps {
   eventBus: EventBus;
   /** The delivery guard's lifecycle rebind after a seat changes hands; absent in bare harnesses. */
   rebindLifecycle?: (nodeId: string) => void;
+  /** Runs `fn` holding the lifecycle lease of `nodeIds` (the delivery guard's); absent in bare harnesses. */
+  lifecycle?: <T>(nodeIds: string[], fn: () => Promise<T>) => Promise<T>;
+  /** Launches a seat `up` recorded with no launch (the pod instantiator's `launchRecorded`). */
+  launchRecorded?: (rigId: string, member: string, rigRoot: string) => Promise<{ ok: false; code: string; message: string } | { ok: true; nodeId: string; sessionName?: string }>;
 }
 
 const OPEN_STATES = new Set(["pending", "in-progress", "blocked"]);
@@ -56,18 +61,36 @@ export function abymeRoutes(deps: AbymeRouteDeps): Hono {
       : deriveSessionName(rig.rig.name, member);
     if (!validateSessionName(session)) return c.json({ error: `session name ${session} is not a valid OpenRig name` }, 400);
 
-    const generation = deps.sessionRegistry.reserveOccupantGeneration();
-    const event = db.transaction(() => {
-      const created = deps.sessionRegistry.registerSession(node.id, session, "adopt", generation);
-      deps.sessionRegistry.updateStatus(created.id, "running");
-      deps.sessionRegistry.updateStartupStatus(created.id, "ready", new Date().toISOString());
-      deps.sessionRegistry.updateBinding(node.id, { attachmentType: ABYME_KIND, externalSessionName: session });
-      deps.kind.recordSeat({ session, nodeId: node.id, agent });
-      return deps.eventBus.persistWithinTransaction({ type: "node.launched", rigId, nodeId: node.id, logicalId: member, sessionName: session });
-    })();
-    deps.rebindLifecycle?.(node.id);
+    // A binding changes under the seat's lifecycle lease, as a launch's does.
+    const lifecycle = deps.lifecycle ?? (<T>(_ids: string[], fn: () => Promise<T>) => fn());
+    const event = await lifecycle([node.id], async () => {
+      const generation = deps.sessionRegistry.reserveOccupantGeneration();
+      const persisted = db.transaction(() => {
+        const created = deps.sessionRegistry.registerSession(node.id, session, "adopt", generation);
+        deps.sessionRegistry.updateStatus(created.id, "running");
+        deps.sessionRegistry.updateStartupStatus(created.id, "ready", new Date().toISOString());
+        deps.sessionRegistry.updateBinding(node.id, { attachmentType: ABYME_KIND, externalSessionName: session });
+        deps.kind.recordSeat({ session, nodeId: node.id, agent });
+        return deps.eventBus.persistWithinTransaction({ type: "node.launched", rigId, nodeId: node.id, logicalId: member, sessionName: session });
+      })();
+      deps.rebindLifecycle?.(node.id);
+      return persisted;
+    });
     deps.eventBus.notifySubscribers(event);
     return c.json({ nodeId: node.id, session });
+  });
+
+  app.post("/launch", async (c) => {
+    let body: { rigId?: unknown; member?: unknown; rigRoot?: unknown };
+    try { body = await c.req.json(); } catch { return c.json({ error: "body must be JSON" }, 400); }
+    const { rigId, member, rigRoot } = body;
+    if (typeof rigId !== "string" || typeof member !== "string" || typeof rigRoot !== "string" || !rigId || !member || !nodePath.isAbsolute(rigRoot)) {
+      return c.json({ error: "rigId and member are required strings, and rigRoot an absolute folder" }, 400);
+    }
+    if (!deps.launchRecorded) return c.json({ error: "this daemon cannot launch a recorded seat" }, 501);
+    const r = await deps.launchRecorded(rigId, member, rigRoot);
+    if (!r.ok) return c.json({ error: r.message, code: r.code }, r.code === "rig_not_found" || r.code === "node_not_found" ? 404 : 409);
+    return c.json({ nodeId: r.nodeId, session: r.sessionName ?? null });
   });
 
   app.get("/seats", (c) => {

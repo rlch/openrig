@@ -325,7 +325,7 @@ import type {
 } from "./continuity-policy-materializer.js";
 import { isKeptPluginSkill, type ReconcileSkillLoadoutResult, type SkillLoadout, type SkillRuntime } from "./skill-catalog.js";
 import type { SystemWorldResolution } from "./system-world.js";
-import type { SeatEnv } from "./seat-env.js";
+import { mergeSeatEnv, type SeatEnv } from "./seat-env.js";
 
 function defaultCultureStartupFile(): ResolvedStartupFile {
   const assetsRoot = nodePath.resolve(import.meta.dirname, "../../assets");
@@ -1239,7 +1239,51 @@ export class PodRigInstantiator {
     return { ok: true, rigId, nodeId, logicalId: node.logicalId, status: "launched", sessionName: result.sessionName, warnings: result.warnings };
   }
 
-  async instantiate(rigSpecYaml: string, rigRoot: string, opts?: { nonInterruptive?: boolean; cwdOverride?: string; env?: SeatEnv; installRoot?: string; force?: boolean; created?: (rigId: string) => void; prelaunchHook?: (rigId: string, replacedRigIds: readonly string[]) => Promise<{ ok: true; rollback?: () => Promise<void> } | { ok: false; code: string; message: string; retainRig?: boolean }> }): Promise<InstantiateOutcome> {
+  /**
+   * Fork branch `abyme`: launch a seat a rig recorded with no launch (`/api/up` with `launch: false`),
+   * from what its node keeps and the agent ref under `rigRoot`, the folder the rig came up from. It
+   * starts with the env its node was saved with and the rig's culture, as its peers did. Refused for a
+   * seat that is bound or has a live session.
+   */
+  async launchRecorded(rigId: string, logicalId: string, rigRoot: string): Promise<
+    { ok: false; code: string; message: string } | { ok: true; nodeId: string; sessionName?: string; warnings?: string[] }
+  > {
+    const rig = this.deps.rigRepo.getRig(rigId);
+    if (!rig) return { ok: false, code: "rig_not_found", message: `Rig "${rigId}" not found.` };
+    const node = rig.nodes.find((n) => n.logicalId === logicalId || n.id === logicalId);
+    if (!node) return { ok: false, code: "node_not_found", message: `No member ${logicalId} in rig "${rig.rig.name}".` };
+    const podRow = this.deps.podRepo.getPodsForRig(rigId).find((p) => p.id === node.podId);
+    if (!podRow || !node.agentRef || node.runtime === "terminal") return { ok: false, code: "not_an_agent_member", message: `${node.logicalId} is no agent member of a pod.` };
+    if (node.binding !== null) return { ok: false, code: "already_bound", message: `${node.logicalId} is already bound.` };
+    if (this.deps.sessionRegistry.getSessionsForRig(rigId).some((s) => s.nodeId === node.id && s.status === "running")) {
+      return { ok: false, code: "already_running", message: `${node.logicalId} has a running session.` };
+    }
+    const ns = podRow.namespace;
+    const fragment: Record<string, unknown> = {
+      id: node.logicalId.startsWith(`${ns}.`) ? node.logicalId.slice(ns.length + 1) : node.logicalId,
+      agent_ref: node.agentRef,
+      ...(node.profile && { profile: node.profile }),
+      ...(node.runtime && { runtime: node.runtime }),
+      ...(node.cwd && { cwd: node.cwd }),
+      ...(node.label && { label: node.label }),
+      ...(node.role && { role: node.role }),
+      ...(node.model && { model: node.model }),
+      ...(node.effort && { effort: node.effort }),
+    };
+    const rawSpec = { version: "0.2", name: rig.rig.name, pods: [{ id: ns, label: podRow.label, members: [fragment], edges: [] }], edges: [] };
+    const validation = PodRigSpecSchema.validate(rawSpec, { externalQualifiedIds: rig.nodes.map((n) => n.logicalId) });
+    if (!validation.valid) return { ok: false, code: "validation_failed", message: validation.errors.join("; ") };
+    const rigSpec = PodRigSpecSchema.normalize(rawSpec);
+    const culture = this.rigCultureFile(rigId);
+    if (culture) rigSpec.cultureFile = culture;
+    const pod = rigSpec.pods[0]!;
+    const member = pod.members[0]!;
+    const launched = await this.launchExistingAgentMember({ rigId, rigSpec, rigRoot, pod, member, qualifiedId: node.logicalId, nodeId: node.id });
+    if (launched.status !== "launched") return { ok: false, code: launched.status, message: launched.error ?? `${node.logicalId} did not start.` };
+    return { ok: true, nodeId: node.id, sessionName: launched.sessionName, warnings: launched.warnings };
+  }
+
+  async instantiate(rigSpecYaml: string, rigRoot: string, opts?: { nonInterruptive?: boolean; cwdOverride?: string; env?: SeatEnv; rigName?: string; savedEnv?: SeatEnv; launch?: boolean; installRoot?: string; force?: boolean; created?: (rigId: string) => void; prelaunchHook?: (rigId: string, replacedRigIds: readonly string[]) => Promise<{ ok: true; rollback?: () => Promise<void> } | { ok: false; code: string; message: string; retainRig?: boolean }> }): Promise<InstantiateOutcome> {
     // #141: while an import may archive a stopped same-name generation, allow one import per rig name at
     // a time on this daemon. Otherwise two imports could each replace it, or one could archive the other's
     // in-progress replacement. Unrelated names are unaffected; an adapter that cannot probe keeps today's
@@ -1248,7 +1292,7 @@ export class PodRigInstantiator {
     if (this.deps.tmuxAdapter?.probeSession) {
       try {
         const parsed = PodRigSpecCodec.parse(rigSpecYaml) as { name?: unknown };
-        name = typeof parsed?.name === "string" ? parsed.name : null;
+        name = opts?.rigName ?? (typeof parsed?.name === "string" ? parsed.name : null);
       } catch { /* the import below reports the parse error */ }
     }
     if (!name) return this.instantiateOnce(rigSpecYaml, rigRoot, opts);
@@ -1265,7 +1309,7 @@ export class PodRigInstantiator {
     }
   }
 
-  private async instantiateOnce(rigSpecYaml: string, rigRoot: string, opts?: { nonInterruptive?: boolean; cwdOverride?: string; env?: SeatEnv; installRoot?: string; force?: boolean; created?: (rigId: string) => void; prelaunchHook?: (rigId: string, replacedRigIds: readonly string[]) => Promise<{ ok: true; rollback?: () => Promise<void> } | { ok: false; code: string; message: string; retainRig?: boolean }> }): Promise<InstantiateOutcome> {
+  private async instantiateOnce(rigSpecYaml: string, rigRoot: string, opts?: { nonInterruptive?: boolean; cwdOverride?: string; env?: SeatEnv; rigName?: string; savedEnv?: SeatEnv; launch?: boolean; installRoot?: string; force?: boolean; created?: (rigId: string) => void; prelaunchHook?: (rigId: string, replacedRigIds: readonly string[]) => Promise<{ ok: true; rollback?: () => Promise<void> } | { ok: false; code: string; message: string; retainRig?: boolean }> }): Promise<InstantiateOutcome> {
     // 1. Parse + validate
     let rigSpec: PodRigSpec;
     try {
@@ -1277,6 +1321,13 @@ export class PodRigInstantiator {
       rigSpec = PodRigSpecSchema.normalize(raw as Record<string, unknown>);
     } catch (err) {
       return { ok: false, code: "validation_failed", errors: [(err as Error).message] };
+    }
+    // Fork branch `abyme`: one spec is a template for many rigs, each named by the caller, and the
+    // env every member is saved with (a seat launched later starts with it).
+    if (opts?.rigName) rigSpec = { ...rigSpec, name: opts.rigName };
+    if (opts?.savedEnv) {
+      const saved = opts.savedEnv;
+      rigSpec = { ...rigSpec, pods: rigSpec.pods.map((pod) => ({ ...pod, members: pod.members.map((m) => ({ ...m, env: mergeSeatEnv(m.env, saved) })) })) };
     }
 
     // 1b. S5b running-name guard (OPR.0.5.4.11) — THE rig-up path (the 08-26
@@ -1556,6 +1607,13 @@ export class PodRigInstantiator {
           nodeIdMap[qualifiedId] = nodeId;
         } catch (err) {
           nodeResults.push({ logicalId: qualifiedId, status: "failed", error: (err as Error).message });
+          continue;
+        }
+
+        // Fork branch `abyme`: recorded, not launched; its seat starts when work first reaches it
+        // (`launchRecorded`), with the rig's culture recorded here for it.
+        if (opts?.launch === false) {
+          this.recordRigCulture(rigId, rigSpec, rigRoot);
           continue;
         }
 
