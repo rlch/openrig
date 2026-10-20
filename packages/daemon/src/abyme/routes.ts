@@ -52,7 +52,7 @@ export function abymeRoutes(deps: AbymeRouteDeps): Hono {
     const node = rig.nodes.find((n) => n.logicalId === member);
     if (!node) return c.json({ error: `member ${member} not found in rig ${rig.rig.name}` }, 404);
     if (node.binding !== null) return c.json({ error: `member ${member} is already bound` }, 409);
-    const holder = db.prepare("SELECT session_name FROM abyme_seats WHERE agent_id = ?").get(agent) as { session_name: string } | undefined;
+    const holder = db.prepare("SELECT s.session_name FROM abyme_seats s JOIN nodes n ON n.id = s.node_id WHERE s.agent_id = ?").get(agent) as { session_name: string } | undefined;
     if (holder) return c.json({ error: `agent ${agent} already holds ${holder.session_name}` }, 409);
 
     const pod = podOf(node.podId)?.namespace;
@@ -143,7 +143,8 @@ export function readFlow(db: Database.Database, rig: RigWithRelations, since: st
   const space = (db.prepare("SELECT space_id FROM abyme_rigs WHERE rig_id = ?").get(rig.rig.id) as { space_id: string } | undefined)?.space_id ?? null;
   const pods = db.prepare("SELECT id, namespace, label FROM pods WHERE rig_id = ? ORDER BY namespace").all(rig.rig.id) as
     Array<{ id: string; namespace: string; label: string }>;
-  const agentOf = db.prepare("SELECT agent_id FROM abyme_seats WHERE session_name = ?");
+  // Held by the row of this node: one left by a deleted rig of the same name holds nothing here.
+  const agentOf = db.prepare("SELECT agent_id FROM abyme_seats WHERE session_name = ? AND node_id = ?");
   const latestSession = db.prepare("SELECT session_name FROM sessions WHERE node_id = ? ORDER BY id DESC LIMIT 1");
 
   const seats: Array<{ nodeId: string; member: string; session: string | null; pod: string | null; agent: string | null; removed?: true }> = rig.nodes.map((node) => {
@@ -153,7 +154,7 @@ export function readFlow(db: Database.Database, rig: RigWithRelations, since: st
     const session = node.binding?.externalSessionName ?? node.binding?.tmuxSession
       ?? (latestSession.get(node.id) as { session_name: string } | undefined)?.session_name
       ?? (ns && node.logicalId.startsWith(`${ns}.`) ? deriveCanonicalSessionName(ns, node.logicalId.slice(ns.length + 1), rig.rig.name) : deriveSessionName(rig.rig.name, node.logicalId));
-    const agent = session ? (agentOf.get(session) as { agent_id: string } | undefined)?.agent_id ?? null : null;
+    const agent = session ? (agentOf.get(session, node.id) as { agent_id: string } | undefined)?.agent_id ?? null : null;
     return { nodeId: node.id, member: node.logicalId, session, pod: node.podId ?? null, agent };
   });
   // The folder of the spec the rig came up from, which a member's `local:` agent ref is under.

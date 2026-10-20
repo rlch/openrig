@@ -90,8 +90,11 @@ export class AbymeSeatKind implements SeatKind {
     return parsed as T;
   }
 
+  /** The seat `session` names while its node stands: a rig brought up again under the same name has
+   *  the same session names, and a row left by its deleted rig's node is no seat of the new one. */
   seatForSession(session: string): AbymeSeatRow | null {
-    const row = this.database.prepare("SELECT session_name, node_id, agent_id FROM abyme_seats WHERE session_name = ?")
+    const row = this.database.prepare(`SELECT s.session_name, s.node_id, s.agent_id FROM abyme_seats s
+      JOIN nodes n ON n.id = s.node_id WHERE s.session_name = ?`)
       .get(session) as { session_name: string; node_id: string; agent_id: string } | undefined;
     return row ? { session: row.session_name, nodeId: row.node_id, agent: row.agent_id } : null;
   }

@@ -247,6 +247,31 @@ describe("the abyme seat kind", () => {
     expect(tmuxCommands).toEqual([]);
   });
 
+  it("holds no seat of a rig brought up again under a deleted one's name", async () => {
+    const first = deps.rigRepo.createRig("pr-1");
+    const firstPod = new PodRepository(db).createPod(first.id, "dev", "Dev");
+    deps.rigRepo.addNode(first.id, "dev.build", { role: "worker", runtime: "claude-code", podId: firstPod.id });
+    const old = await launch(first.id, "dev.build", "pr-1");
+    const oldAgent = agentOf(old.sessionName)!;
+    deps.rigRepo.deleteRig(first.id);
+
+    const again = deps.rigRepo.createRig("pr-1");
+    const pod = new PodRepository(db).createPod(again.id, "dev", "Dev");
+    const build = deps.rigRepo.addNode(again.id, "dev.build", { role: "worker", runtime: "claude-code", podId: pod.id });
+    const kind = deps.seatKinds!.custom("abyme")! as AbymeSeatKind;
+    expect(kind.seatForSession(old.sessionName)).toBeNull();
+    type Seats = { seats: Array<{ session: string; agent: string | null }> };
+    const flow = await (await app.request(`/api/abyme/flow?rig=${again.id}`)).json() as Seats;
+    expect(flow.seats).toEqual([expect.objectContaining({ nodeId: build.id, session: old.sessionName, agent: null })]);
+
+    // Its first work starts an agent of its own, never the old rig's.
+    plugin.calls.length = 0;
+    const launched = await launch(again.id, "dev.build", "pr-1");
+    expect(plugin.calls.map((c) => c.verb)).toEqual(["start"]);
+    expect(kind.seatForSession(launched.sessionName)).toMatchObject({ nodeId: build.id });
+    expect(kind.seatForSession(launched.sessionName)!.agent).not.toBe(oldAgent);
+  });
+
   it("answers activity from what abyme last posted", async () => {
     const { rig, build: node } = makeRig();
     const build = await launch(rig.id, "dev.build", rig.name);
