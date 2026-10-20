@@ -46,7 +46,7 @@ const VALID_WAIT_TARGET_CONDITIONS = new Set(["healthy"]);
 const VALID_WORKSPACE_KINDS = new Set<string>(WORKSPACE_KINDS as readonly string[]);
 
 const RIG_KEYS = new Set([
-  "version", "name", "summary", "culture_file", "permission_policy", "managed_blocks", "docs",
+  "version", "name", "label", "summary", "culture_file", "permission_policy", "managed_blocks", "docs",
   "startup", "services", "workspace", "pods", "edges", "non_interruptive", "env",
 ]);
 const POD_KEYS = new Set(["id", "label", "summary", "continuity_policy", "startup", "members", "edges"]);
@@ -118,6 +118,9 @@ export class RigSpecSchema {
     // Required fields
     if (!obj["name"] || typeof obj["name"] !== "string") errors.push("name: required non-empty string");
     if (!obj["version"] || typeof obj["version"] !== "string") errors.push("version: required non-empty string");
+
+    // Fork branch `abyme`: the words a row of the template's rigs says in abyme.
+    if (obj["label"] !== undefined && obj["label"] !== null && typeof obj["label"] !== "string") errors.push("label: must be a string");
 
     // culture_file path safety
     if (obj["culture_file"] !== undefined && obj["culture_file"] !== null) {
@@ -256,6 +259,7 @@ export class RigSpecSchema {
     return {
       version: raw["version"] as string,
       name: raw["name"] as string,
+      label: raw["label"] as string | undefined,
       summary: raw["summary"] as string | undefined,
       cultureFile: raw["culture_file"] as string | undefined,
       permissionPolicy: raw["permission_policy"] as string | undefined,

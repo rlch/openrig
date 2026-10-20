@@ -98,6 +98,7 @@ export class RigSpecCodec {
       version: spec.version,
       name: spec.name,
     };
+    if (spec.label) doc["label"] = spec.label;
     if (spec.summary) doc["summary"] = spec.summary;
     if (spec.cultureFile) doc["culture_file"] = spec.cultureFile;
     // OPR.0.4.8.3 Seam B: rig-level permission_policy ref round-trips through serialization.

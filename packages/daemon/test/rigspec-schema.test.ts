@@ -87,6 +87,13 @@ describe("RigSpec schema (pod-aware)", () => {
     );
   });
 
+  it("accepts a rig's label (fork branch abyme), keeps it, and refuses one that is no string", () => {
+    const rig = { ...structuredClone(VALID_RIG), label: "Pull requests" };
+    expect(RigSpecSchema.validate(rig).valid).toBe(true);
+    expect(RigSpecSchema.normalize(rig).label).toBe("Pull requests");
+    expect(RigSpecSchema.validate({ ...rig, label: 3 }).errors).toContain("label: must be a string");
+  });
+
   it("allows codex_config_profile for Codex members and normalizes it", () => {
     const rig = structuredClone(VALID_RIG);
     (rig.pods[0]!.members[1] as Record<string, unknown>)["codex_config_profile"] = "sysadmin";

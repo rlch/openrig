@@ -1226,6 +1226,8 @@ export interface RigSpec {
   nonInterruptive?: boolean;
   version: string;
   name: string;
+  /** Fork branch `abyme`: the words a row of the template's rigs says in abyme. */
+  label?: string;
   summary?: string;
   cultureFile?: string;
   /** OPR.0.4.8.3 Seam B: optional rig-level permission_policy REF (builtin:<name> or a
